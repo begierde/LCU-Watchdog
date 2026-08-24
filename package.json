@@ -1,0 +1,76 @@
+{
+  "name": "lcu-watchdog",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows Electron watcher for League Client players and matches",
+  "main": "./out/main/index.js",
+  "author": "LCU Watchdog contributors",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "qa:electron": "node scripts/electron-smoke.mjs",
+    "qa:lcu": "node scripts/lcu-smoke.mjs",
+    "lint": "eslint . --max-warnings=0",
+    "build": "npm run typecheck && electron-vite build",
+    "rebuild:native": "electron-rebuild -f -w lcu-native",
+    "package:win": "npm run build && npm run rebuild:native && electron-builder --win nsis --x64",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "lcu-native": "file:./native/lcu-native",
+    "naive-ui": "^2.42.0",
+    "pinia": "^3.0.3",
+    "vue": "^3.5.21",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.1",
+    "@types/node": "^24.3.0",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "@vue/eslint-config-typescript": "^14.6.0",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^5.0.0",
+    "eslint": "^9.34.0",
+    "eslint-plugin-vue": "^10.4.0",
+    "playwright": "^1.55.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.41.0",
+    "vite": "^7.1.3",
+    "vitest": "^3.2.4",
+    "vue-tsc": "^3.0.6"
+  },
+  "build": {
+    "appId": "dev.lcuwatchdog.app",
+    "productName": "LCU Watchdog",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "native/lcu-native/build/Release/lcu_native.node",
+        "to": "native/lcu_native.node"
+      }
+    ],
+    "win": {
+      "target": ["nsis"],
+      "artifactName": "${productName}-${version}-${arch}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
