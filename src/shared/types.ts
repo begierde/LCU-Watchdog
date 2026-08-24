@@ -110,7 +110,7 @@ export interface WatchEvent {
   occurredAt: string
   player: Pick<PlayerTarget, 'id' | 'gameName' | 'tagLine' | 'puuid' | 'serverId'>
   game: MatchInfo
-  source: 'lcu-history' | 'sgp-history' | 'lcu-spectator+sgp-gsm' | 'test'
+  source: 'lcu-history' | 'sgp-history' | 'lcu-chat-presence' | 'lcu-spectator+sgp-gsm' | 'sgp-gsm' | 'test'
   deliveries?: {
     webhook?: 'sent' | 'failed' | 'disabled'
     notification?: 'sent' | 'failed' | 'disabled'

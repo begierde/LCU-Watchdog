@@ -5,6 +5,14 @@ import { HttpStatusError, requestLocalJson } from './lcu/http'
 interface SessionTokens { pid: number; entitlement: string; leagueSession: string }
 interface AliasResult { puuid: string; alias?: { game_name?: string; tag_line?: string } }
 interface SummonerProfile { profileIconId?: number; summonerLevel?: number }
+interface SpectatorAvailability { available: boolean; error?: unknown }
+
+export interface OngoingMatchResult {
+  match: MatchInfo
+  source: 'lcu-chat-presence' | 'lcu-spectator+sgp-gsm' | 'sgp-gsm'
+}
+
+export class OngoingQueryUnavailableError extends Error {}
 
 export class GameDataClient {
   private tokens: SessionTokens | null = null
@@ -65,26 +73,39 @@ export class GameDataClient {
     return { source: 'sgp-history', matches: normalizeMatches(data, puuid).slice(0, 20) }
   }
 
-  async getOngoing(puuid: string, serverId: string): Promise<MatchInfo | null> {
+  async getOngoing(puuid: string, serverId: string): Promise<OngoingMatchResult | null> {
     const connection = this.requireConnection()
     if (serverId !== connection.serverId) return null
-    if (!(await this.spectator.isAvailable(puuid))) return null
+
+    let presenceError: unknown
     try {
-      const data = await this.requestSgp<any>(serverId, 'league-session', `/gsm/v1/ledge/region/{region}/puuid/${encodeURIComponent(puuid)}`)
-      const credentials = data?.playerCredentials ?? {}
-      const game = data?.game ?? {}
-      const gameId = String(credentials.gameId ?? game.id ?? '')
-      if (!gameId) return null
-      const created = Number(credentials.gameCreateDate ?? 0)
-      return {
-        gameId,
-        queueId: Number(credentials.queueId ?? game.gameQueueConfigId ?? 0),
-        gameMode: String(credentials.gameMode ?? game.gameMode ?? ''),
-        startedAt: created > 0 ? new Date(created).toISOString() : null
+      const friends = await requestLocalJson<unknown>(connection, '/lol-chat/v1/friends')
+      const presence = normalizeChatPresence(friends, puuid)
+      if (presence) return { match: presence, source: 'lcu-chat-presence' }
+    } catch (error) { presenceError = error }
+
+    const spectator = await this.spectator.isAvailable(puuid)
+    if (spectator.available) {
+      try {
+        const game = await this.getGsmOngoing(serverId, puuid)
+        return game ? { match: game, source: 'lcu-spectator+sgp-gsm' } : null
+      } catch (sgpError) {
+        throw new OngoingQueryUnavailableError(
+          `Spectator 已确认该玩家可查询，但无法取得对局详情：${describeOngoingError(sgpError)}`
+        )
       }
-    } catch (error) {
-      if (error instanceof HttpStatusError && error.status === 404) return null
-      throw error
+    }
+
+    try {
+      const game = await this.getGsmOngoing(serverId, puuid)
+      if (game) return { match: game, source: 'sgp-gsm' }
+      return null
+    } catch (sgpError) {
+      const reasons = [spectator.error, sgpError, presenceError]
+        .filter((error) => error !== undefined)
+        .map(describeOngoingError)
+        .filter((reason, index, list) => list.indexOf(reason) === index)
+      throw new OngoingQueryUnavailableError(`无法确认实时对局：${reasons.join('；') || '当前会话没有该玩家的查询权限'}`)
     }
   }
 
@@ -100,6 +121,16 @@ export class GameDataClient {
     const current = getServer(currentId)
     const target = getServer(targetId)
     if (!current?.isTencent || !target?.isTencent) throw new Error('仅腾讯服务器支持跨区历史查询')
+  }
+
+  private async getGsmOngoing(serverId: string, puuid: string): Promise<MatchInfo | null> {
+    try {
+      const data = await this.requestSgp<unknown>(serverId, 'league-session', `/gsm/v1/ledge/region/{region}/puuid/${encodeURIComponent(puuid)}`)
+      return normalizeGsmOngoing(data)
+    } catch (error) {
+      if (error instanceof HttpStatusError && error.status === 404) return null
+      throw error
+    }
   }
 
   private async refreshTokens(connection: PrivateLcuConnection): Promise<SessionTokens> {
@@ -153,12 +184,12 @@ export class GameDataClient {
 }
 
 class SpectatorBatcher {
-  private pending = new Map<string, Array<(available: boolean) => void>>()
+  private pending = new Map<string, Array<(result: SpectatorAvailability) => void>>()
   private timer: NodeJS.Timeout | null = null
 
   constructor(private readonly getConnection: () => PrivateLcuConnection | null) {}
 
-  isAvailable(puuid: string): Promise<boolean> {
+  isAvailable(puuid: string): Promise<SpectatorAvailability> {
     return new Promise((resolve) => {
       const resolvers = this.pending.get(puuid) ?? []
       resolvers.push(resolve)
@@ -172,16 +203,77 @@ class SpectatorBatcher {
     const batch = this.pending
     this.pending = new Map()
     const puuids = [...batch.keys()]
-    let available = new Set<string>()
+    const results = new Map<string, SpectatorAvailability>()
     try {
-      const connection = this.getConnection()
-      if (connection) {
-        const response = await requestLocalJson<{ availableForWatching?: string[] }>(connection, '/lol-spectator/v3/buddy/spectate', { method: 'POST', body: puuids })
-        available = new Set(response.availableForWatching ?? [])
-      }
-    } catch { /* all callers receive false and the next cycle will retry */ }
-    for (const [puuid, resolvers] of batch) for (const resolve of resolvers) resolve(available.has(puuid))
+      const available = await this.request(puuids)
+      for (const puuid of puuids) results.set(puuid, { available: available.has(puuid) })
+    } catch (batchError) {
+      if (puuids.length === 1) results.set(puuids[0]!, { available: false, error: batchError })
+      else await Promise.all(puuids.map(async (puuid) => {
+        try { results.set(puuid, { available: (await this.request([puuid])).has(puuid) }) }
+        catch (error) { results.set(puuid, { available: false, error }) }
+      }))
+    }
+    for (const [puuid, resolvers] of batch) {
+      const result = results.get(puuid) ?? { available: false, error: new Error('League Client 尚未连接') }
+      for (const resolve of resolvers) resolve(result)
+    }
   }
+
+  private async request(puuids: string[]): Promise<Set<string>> {
+    const connection = this.getConnection()
+    if (!connection) throw new Error('League Client 尚未连接')
+    const response = await requestLocalJson<{ availableForWatching?: string[] }>(
+      connection, '/lol-spectator/v3/buddy/spectate', { method: 'POST', body: puuids }
+    )
+    return new Set(response.availableForWatching ?? [])
+  }
+}
+
+export function normalizeChatPresence(input: unknown, puuid: string): MatchInfo | null {
+  if (!Array.isArray(input)) return null
+  const friend = input.find((item: any) => item?.puuid === puuid) as any
+  if (!friend) return null
+  const lol = friend.lol ?? {}
+  const status = String(lol.gameStatus ?? '').replace(/[-_\s]/g, '').toLowerCase()
+  if (status !== 'ingame') return null
+  const timestamp = Number(lol.timestamp ?? 0)
+  const gameId = String(lol.gameId ?? lol.spectatorId ?? (timestamp > 0 ? `presence-${puuid}-${timestamp}` : ''))
+  if (!gameId) return null
+  return {
+    gameId,
+    queueId: Number(lol.queueId ?? lol.queue ?? 0),
+    gameMode: String(lol.gameMode ?? lol.gameQueueType ?? ''),
+    startedAt: timestamp > 0 ? new Date(timestamp).toISOString() : null
+  }
+}
+
+export function normalizeGsmOngoing(input: unknown): MatchInfo | null {
+  const data = input as any
+  const credentials = data?.playerCredentials ?? {}
+  const game = data?.game ?? {}
+  const gameId = String(credentials.gameId ?? game.id ?? '')
+  if (!gameId) return null
+  const created = Number(credentials.gameCreateDate ?? game.gameCreateDate ?? 0)
+  return {
+    gameId,
+    queueId: Number(credentials.queueId ?? game.gameQueueConfigId ?? 0),
+    gameMode: String(credentials.gameMode ?? game.gameMode ?? ''),
+    startedAt: created > 0 ? new Date(created).toISOString() : null
+  }
+}
+
+export function describeOngoingError(error: unknown): string {
+  if (error instanceof HttpStatusError) {
+    const body = error.body as any
+    const detail = String(body?.message ?? '')
+    if (error.status === 500 && /(?:410|GONE|filtered)/i.test(detail)) {
+      return 'Riot Spectator 已过滤该玩家（通常仅允许好友或会话授权玩家）'
+    }
+    if (error.status === 401 || error.status === 403) return `SGP 拒绝访问该玩家（HTTP ${error.status}）`
+    return `实时接口 HTTP ${error.status}`
+  }
+  return error instanceof Error ? error.message : String(error)
 }
 
 export function normalizeMatches(input: unknown, puuid?: string): MatchInfo[] {

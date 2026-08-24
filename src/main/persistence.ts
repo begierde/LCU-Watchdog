@@ -53,7 +53,7 @@ const watchEventSchema = z.object({
   schemaVersion: z.literal(1), eventId: z.string(), type: z.enum(['ongoing_game_detected', 'new_match_detected']), occurredAt: z.string(),
   player: z.object({ id: z.string(), gameName: z.string(), tagLine: z.string(), puuid: z.string(), serverId: z.string() }),
   game: z.object({ gameId: z.string(), queueId: z.number(), gameMode: z.string(), startedAt: z.string().nullable(), durationSeconds: z.number().optional() }),
-  source: z.enum(['lcu-history', 'sgp-history', 'lcu-spectator+sgp-gsm', 'test']),
+  source: z.enum(['lcu-history', 'sgp-history', 'lcu-chat-presence', 'lcu-spectator+sgp-gsm', 'sgp-gsm', 'test']),
   deliveries: z.object({ webhook: z.enum(['sent', 'failed', 'disabled']).optional(), notification: z.enum(['sent', 'failed', 'disabled']).optional() }).optional()
 })
 const runtimeSchema = z.object({
@@ -207,6 +207,8 @@ export class RuntimeStore {
     const sanitized = message
       .replace(/(--(?:remoting-auth-token|riotclient-auth-token)=)[^\s]+/gi, '$1[redacted]')
       .replace(/\bSCT[0-9A-Za-z_-]+\b/g, '[redacted-sendkey]')
+    const latest = this.value.diagnostics[0]?.replace(/^\S+\s/, '')
+    if (latest === sanitized) return
     this.value.diagnostics.unshift(`${new Date().toISOString()} ${sanitized}`)
     this.value.diagnostics = this.value.diagnostics.slice(0, 200)
     this.queueSave()

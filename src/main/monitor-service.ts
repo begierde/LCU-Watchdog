@@ -121,8 +121,13 @@ export class MonitorService {
         const errors: string[] = []
         if (history.status === 'fulfilled') await this.processHistory(player, history.value.matches, history.value.source, policy)
         else errors.push(`历史：${this.errorMessage(history.reason)}`)
-        if (ongoing.status === 'fulfilled' && ongoing.value) await this.processOngoing(player, ongoing.value, policy)
-        else if (ongoing.status === 'rejected') errors.push(`进行中：${this.errorMessage(ongoing.reason)}`)
+        if (ongoing.status === 'fulfilled' && ongoing.value) {
+          await this.processOngoing(player, ongoing.value.match, policy, ongoing.value.source)
+        } else if (ongoing.status === 'rejected') {
+          const message = this.errorMessage(ongoing.reason)
+          errors.push(`进行中：${message}`)
+          this.runtimeStore.addDiagnostic(`玩家 ${player.gameName}#${player.tagLine} 进行中查询受限：${message}`)
+        }
         if (errors.length) runtime.lastError = errors.join('；')
       })
     } catch (error) {
@@ -159,13 +164,18 @@ export class MonitorService {
     this.onChange()
   }
 
-  private async processOngoing(player: PlayerTarget, game: MatchInfo, policy: MonitorPolicy): Promise<void> {
+  private async processOngoing(
+    player: PlayerTarget,
+    game: MatchInfo,
+    policy: MonitorPolicy,
+    source: Extract<WatchEvent['source'], 'lcu-chat-presence' | 'lcu-spectator+sgp-gsm' | 'sgp-gsm'>
+  ): Promise<void> {
     if (!queueMatches(game.queueId, policy.ongoing)) return
     const runtime = this.runtimeStore.player(player.id)
     const key = `${player.serverId}:${game.gameId}`
     if (runtime.seenOngoingGameIds.includes(key)) return
     runtime.seenOngoingGameIds = [key, ...runtime.seenOngoingGameIds].slice(0, 200)
-    await this.events.dispatch(this.makeEvent('ongoing_game_detected', player, game, 'lcu-spectator+sgp-gsm'))
+    await this.events.dispatch(this.makeEvent('ongoing_game_detected', player, game, source))
   }
 
   private makeEvent(type: WatchEventType, player: PlayerTarget, game: MatchInfo, source: WatchEvent['source']): WatchEvent {
