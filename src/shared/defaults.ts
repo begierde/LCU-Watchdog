@@ -12,7 +12,9 @@ export const DEFAULT_POLICY: MonitorPolicy = {
 
 const defaultEvent = (type: WatchEventType) => ({
   webhookEnabled: false,
-  webhookTemplate: '{{eventJson}}',
+  webhookTemplate: type === 'ongoing_game_detected'
+    ? '{"title":"{{playerRiotId}} 正在游戏","desp":"**服务器**：{{serverId}}\\n\\n**模式**：{{gameMode}}（队列 {{queueId}}）\\n\\n**对局 ID**：{{gameId}}"}'
+    : '{"title":"{{playerRiotId}} 有新对局","desp":"**服务器**：{{serverId}}\\n\\n**模式**：{{gameMode}}（队列 {{queueId}}）\\n\\n**对局 ID**：{{gameId}}"}',
   notificationEnabled: true,
   notificationTitle: type === 'ongoing_game_detected' ? '{{playerRiotId}} 正在游戏' : '{{playerRiotId}} 有新对局',
   notificationBody:
@@ -25,7 +27,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   version: 1,
   globalPolicy: structuredClone(DEFAULT_POLICY),
   players: [],
-  webhook: { enabled: false, url: '', headers: [], timeoutMs: 10_000 },
+  webhook: { provider: 'serverchan', sendKey: '', enabled: false, url: '', headers: [], timeoutMs: 10_000 },
   events: {
     ongoing_game_detected: defaultEvent('ongoing_game_detected'),
     new_match_detected: defaultEvent('new_match_detected')
@@ -38,6 +40,7 @@ export const newPlayerRuntime = (): PlayerRuntimeState => ({
   seeded: false,
   seenHistoryGameIds: [],
   seenOngoingGameIds: [],
+  recentMatches: [],
   running: false,
   lastRunAt: null,
   nextRunAt: null,
@@ -62,4 +65,3 @@ export const QUEUE_PRESETS = [
   { label: '斗魂竞技场（双人）', value: 1750 },
   { label: '特殊模式 2400', value: 2400 }
 ]
-

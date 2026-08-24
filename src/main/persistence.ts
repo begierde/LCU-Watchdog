@@ -18,6 +18,7 @@ const policySchema = z.object({
 const playerSchema = z.object({
   id: z.string().min(1), gameName: z.string().min(1).max(128), tagLine: z.string().min(1).max(32),
   puuid: z.string().min(8).max(128), serverId: z.string().min(1).max(32), enabled: z.boolean(),
+  profileIconId: z.number().int().nonnegative().optional(), summonerLevel: z.number().int().nonnegative().optional(),
   overridePolicy: policySchema.nullable(), createdAt: z.string()
 })
 const headerSchema = z.object({
@@ -30,13 +31,22 @@ const eventDeliverySchema = z.object({
 })
 export const appConfigSchema = z.object({
   version: z.literal(1), globalPolicy: policySchema, players: z.array(playerSchema).max(500),
-  webhook: z.object({ enabled: z.boolean(), url: z.string().max(2_048), headers: z.array(headerSchema).max(50), timeoutMs: z.number().int().min(1_000).max(60_000) }),
+  webhook: z.object({
+    provider: z.enum(['serverchan', 'generic']).default('serverchan'), sendKey: z.string().max(512).default(''),
+    sendKeyConfigured: z.boolean().optional(), enabled: z.boolean(), url: z.string().max(2_048),
+    headers: z.array(headerSchema).max(50), timeoutMs: z.number().int().min(1_000).max(60_000)
+  }),
   events: z.object({ ongoing_game_detected: eventDeliverySchema, new_match_detected: eventDeliverySchema }),
   closeBehavior: z.enum(['ask', 'tray', 'quit']), selectedConnectionPid: z.number().int().positive().nullable()
 })
 
 const runtimePlayerSchema = z.object({
   seeded: z.boolean(), seenHistoryGameIds: z.array(z.string()).max(200), seenOngoingGameIds: z.array(z.string()).max(200),
+  recentMatches: z.array(z.object({
+    gameId: z.string(), queueId: z.number(), gameMode: z.string(), startedAt: z.string().nullable(),
+    durationSeconds: z.number().optional(), championId: z.number().optional(), championName: z.string().optional(),
+    win: z.boolean().optional(), kills: z.number().optional(), deaths: z.number().optional(), assists: z.number().optional()
+  })).max(20).default([]),
   running: z.boolean(), lastRunAt: z.string().nullable(), nextRunAt: z.string().nullable(), lastError: z.string().nullable()
 })
 const watchEventSchema = z.object({
@@ -52,7 +62,9 @@ const runtimeSchema = z.object({
 
 interface StoredHeader extends Omit<WebhookHeader, 'value' | 'configured'> { value?: string; encryptedValue?: string }
 interface StoredConfig extends Omit<AppConfig, 'webhook'> {
-  webhook: Omit<AppConfig['webhook'], 'headers'> & { headers: StoredHeader[] }
+  webhook: Omit<AppConfig['webhook'], 'provider' | 'headers' | 'sendKey' | 'sendKeyConfigured'> & {
+    provider?: AppConfig['webhook']['provider']; headers: StoredHeader[]; sendKey?: string; encryptedSendKey?: string
+  }
 }
 
 async function readJson(file: string): Promise<unknown | null> {
@@ -78,7 +90,14 @@ export class ConfigStore {
     const raw = await readJson(this.file) as StoredConfig | null
     if (!raw) return
     const headers = (raw.webhook?.headers ?? []).map((header) => this.decodeHeader(header))
-    const parsed = appConfigSchema.safeParse({ ...raw, webhook: { ...raw.webhook, headers } })
+    const sendKey = this.decodeSecret(raw.webhook?.sendKey, raw.webhook?.encryptedSendKey)
+    const events = structuredClone(raw.events)
+    if (!raw.webhook.provider) {
+      for (const type of ['ongoing_game_detected', 'new_match_detected'] as const) {
+        if (events[type]?.webhookTemplate === '{{eventJson}}') events[type].webhookTemplate = DEFAULT_CONFIG.events[type].webhookTemplate
+      }
+    }
+    const parsed = appConfigSchema.safeParse({ ...raw, events, webhook: { ...raw.webhook, headers, sendKey } })
     if (parsed.success) this.config = parsed.data
   }
 
@@ -87,6 +106,8 @@ export class ConfigStore {
       ...structuredClone(this.config),
       webhook: {
         ...this.config.webhook,
+        sendKey: '',
+        sendKeyConfigured: Boolean(this.config.webhook.sendKey),
         headers: this.config.webhook.headers.map((header) => header.secret
           ? { ...header, value: '', configured: Boolean(header.value) }
           : { ...header, configured: Boolean(header.value) })
@@ -98,6 +119,10 @@ export class ConfigStore {
 
   async save(candidate: AppConfig): Promise<void> {
     const incoming = appConfigSchema.parse(candidate)
+    if (!incoming.webhook.sendKey && incoming.webhook.sendKeyConfigured && this.config.webhook.sendKey) {
+      incoming.webhook.sendKey = this.config.webhook.sendKey
+    }
+    delete incoming.webhook.sendKeyConfigured
     const oldHeaders = new Map(this.config.webhook.headers.map((header) => [header.id, header]))
     incoming.webhook.headers = incoming.webhook.headers.map((header) => {
       if (header.secret && !header.value && header.configured) {
@@ -111,11 +136,14 @@ export class ConfigStore {
   }
 
   private async persist(): Promise<void> {
+    const { sendKey, sendKeyConfigured: _sendKeyConfigured, ...webhook } = this.config.webhook
+    void _sendKeyConfigured
     const stored: StoredConfig = {
       ...this.config,
       webhook: {
-        ...this.config.webhook,
-        headers: this.config.webhook.headers.map((header) => this.encodeHeader(header))
+        ...webhook,
+        headers: this.config.webhook.headers.map((header) => this.encodeHeader(header)),
+        ...(sendKey ? { encryptedSendKey: this.encodeSecret(sendKey) } : {})
       }
     }
     await atomicJson(this.file, stored)
@@ -136,6 +164,18 @@ export class ConfigStore {
       try { value = safeStorage.decryptString(Buffer.from(header.encryptedValue, 'base64')) } catch { value = '' }
     }
     return { id: header.id, name: header.name, secret: true, value, configured: Boolean(value) }
+  }
+
+  private encodeSecret(value: string): string {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows 安全存储当前不可用，无法保存 Server酱 SendKey')
+    return safeStorage.encryptString(value).toString('base64')
+  }
+
+  private decodeSecret(value?: string, encryptedValue?: string): string {
+    if (encryptedValue && safeStorage.isEncryptionAvailable()) {
+      try { return safeStorage.decryptString(Buffer.from(encryptedValue, 'base64')) } catch { return '' }
+    }
+    return value ?? ''
   }
 }
 
@@ -164,7 +204,9 @@ export class RuntimeStore {
   removePlayer(id: string): void { delete this.value.players[id]; this.queueSave() }
 
   addDiagnostic(message: string): void {
-    const sanitized = message.replace(/(--(?:remoting-auth-token|riotclient-auth-token)=)[^\s]+/gi, '$1[redacted]')
+    const sanitized = message
+      .replace(/(--(?:remoting-auth-token|riotclient-auth-token)=)[^\s]+/gi, '$1[redacted]')
+      .replace(/\bSCT[0-9A-Za-z_-]+\b/g, '[redacted-sendkey]')
     this.value.diagnostics.unshift(`${new Date().toISOString()} ${sanitized}`)
     this.value.diagnostics = this.value.diagnostics.slice(0, 200)
     this.queueSave()

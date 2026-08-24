@@ -78,11 +78,11 @@ export class AppController {
   async addPlayer(draft: PlayerDraft): Promise<AppSnapshot> {
     const resolved = await this.gameData.resolvePlayer(draft)
     const config = this.configStore.get()
-    if (config.players.some((player) => player.puuid === resolved.puuid && player.serverId === draft.serverId)) {
+    if (config.players.some((player) => player.puuid === resolved.puuid && player.serverId === resolved.serverId)) {
       throw new Error('该玩家已经在监视列表中')
     }
     config.players.push({
-      id: randomUUID(), ...resolved, serverId: draft.serverId, enabled: draft.enabled ?? true,
+      id: randomUUID(), ...resolved, enabled: draft.enabled ?? true,
       overridePolicy: null, createdAt: new Date().toISOString()
     })
     await this.configStore.save(config)

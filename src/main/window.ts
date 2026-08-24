@@ -11,16 +11,22 @@ function trayImage() {
 }
 
 export function createMainWindow(controller: AppController): BrowserWindow {
+  Menu.setApplicationMenu(null)
   const window = new BrowserWindow({
     width: 1180, height: 760, minWidth: 980, minHeight: 660, show: false,
-    backgroundColor: '#f5f6fb', title: 'LCU Watchdog',
+    backgroundColor: '#f5f6fb', title: 'LCU Watchdog', autoHideMenuBar: true,
+    frame: false,
     webPreferences: {
-      preload: path.join(__dirname, '../preload/index.mjs'),
+      preload: path.join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true
     }
   })
+  window.setMenuBarVisibility(false)
+  const broadcastMaximized = () => window.webContents.send('watchdog:window-maximized', window.isMaximized())
+  window.on('maximize', broadcastMaximized)
+  window.on('unmaximize', broadcastMaximized)
 
   window.once('ready-to-show', () => window.show())
   window.webContents.setWindowOpenHandler(({ url }) => {

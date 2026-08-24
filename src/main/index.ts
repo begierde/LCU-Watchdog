@@ -4,7 +4,7 @@ import { registerIpc } from './ipc'
 import { createMainWindow, markQuitting } from './window'
 
 app.setAppUserModelId('dev.lcuwatchdog.app')
-const hasSingleInstanceLock = app.requestSingleInstanceLock()
+const hasSingleInstanceLock = process.env.LCU_WATCHDOG_QA === '1' || app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
 let controller: AppController | null = null

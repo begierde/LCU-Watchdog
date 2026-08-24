@@ -1,6 +1,7 @@
 export type WatchEventType = 'ongoing_game_detected' | 'new_match_detected'
 export type CloseBehavior = 'ask' | 'tray' | 'quit'
 export type ConnectionHealth = 'connecting' | 'connected' | 'unauthorized' | 'unavailable'
+export type WindowAction = 'minimize' | 'toggle-maximize' | 'close'
 
 export interface QueueFilter {
   mode: 'all' | 'include'
@@ -20,6 +21,8 @@ export interface PlayerTarget {
   tagLine: string
   puuid: string
   serverId: string
+  profileIconId?: number
+  summonerLevel?: number
   enabled: boolean
   overridePolicy: MonitorPolicy | null
   createdAt: string
@@ -54,6 +57,9 @@ export interface AppConfig {
   globalPolicy: MonitorPolicy
   players: PlayerTarget[]
   webhook: {
+    provider: 'serverchan' | 'generic'
+    sendKey: string
+    sendKeyConfigured?: boolean
     enabled: boolean
     url: string
     headers: WebhookHeader[]
@@ -89,6 +95,12 @@ export interface MatchInfo {
   gameMode: string
   startedAt: string | null
   durationSeconds?: number
+  championId?: number
+  championName?: string
+  win?: boolean
+  kills?: number
+  deaths?: number
+  assists?: number
 }
 
 export interface WatchEvent {
@@ -109,6 +121,7 @@ export interface PlayerRuntimeState {
   seeded: boolean
   seenHistoryGameIds: string[]
   seenOngoingGameIds: string[]
+  recentMatches: MatchInfo[]
   running: boolean
   lastRunAt: string | null
   nextRunAt: string | null
@@ -144,7 +157,8 @@ export interface WatchdogApi {
   runNow(playerId?: string): Promise<void>
   selectConnection(pid: number | null): Promise<AppSnapshot>
   testEvent(request: TestEventRequest): Promise<{ ok: boolean; message: string }>
+  windowControl(action: WindowAction): Promise<boolean>
   onSnapshot(listener: (snapshot: AppSnapshot) => void): () => void
   onNavigatePlayer(listener: (playerId: string) => void): () => void
+  onWindowMaximized(listener: (maximized: boolean) => void): () => void
 }
-

@@ -2,6 +2,7 @@ import { Notification } from 'electron'
 import type { AppConfig, TestEventRequest, WatchEvent } from '@shared/types'
 import type { ConfigStore, RuntimeStore } from './persistence'
 import { renderJsonTemplate, renderTextTemplate } from './template'
+import { assertServerChanSuccess, buildServerChanRequest } from './serverchan'
 
 const RETRY_DELAYS = [1_000, 5_000, 15_000]
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -47,17 +48,32 @@ export class EventDispatcher {
   }
 
   private async sendWebhook(config: AppConfig, event: WatchEvent): Promise<void> {
-    if (!config.webhook.url) throw new Error('Webhook URL 为空')
-    const body = JSON.stringify(renderJsonTemplate(config.events[event.type].webhookTemplate, event))
+    let url = config.webhook.url
+    let body = ''
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    for (const header of config.webhook.headers) if (header.name && header.value) headers[header.name] = header.value
+    if (config.webhook.provider === 'serverchan') {
+      const request = buildServerChanRequest(config.webhook.sendKey, config.events[event.type].webhookTemplate, event)
+      url = request.url
+      body = request.body
+    } else {
+      if (!url) throw new Error('Webhook URL 为空')
+      body = JSON.stringify(renderJsonTemplate(config.events[event.type].webhookTemplate, event))
+      for (const header of config.webhook.headers) if (header.name && header.value) headers[header.name] = header.value
+    }
 
     for (let attempt = 0; ; attempt++) {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), config.webhook.timeoutMs)
       try {
-        const response = await fetch(config.webhook.url, { method: 'POST', headers, body, signal: controller.signal })
-        if (response.ok) return
+        const response = await fetch(url, { method: 'POST', headers, body, signal: controller.signal })
+        const responseText = await response.text()
+        if (response.ok) {
+          if (config.webhook.provider === 'serverchan') {
+            try { assertServerChanSuccess(responseText) }
+            catch (error) { throw new NonRetryableWebhookError(error instanceof Error ? error.message : String(error)) }
+          }
+          return
+        }
         const retryable = response.status === 408 || response.status === 429 || response.status >= 500
         if (!retryable) throw new NonRetryableWebhookError(`HTTP ${response.status}`)
         if (attempt >= RETRY_DELAYS.length) throw new Error(`HTTP ${response.status}`)

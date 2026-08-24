@@ -1,5 +1,24 @@
 <template>
   <div v-if="store.snapshot && config" class="app-shell">
+    <div class="window-titlebar">
+      <div class="window-tab">
+        <span class="window-tab-mark">LCU</span>
+        <strong>{{ currentPage.label }}</strong>
+        <span v-if="selectedPlayer" class="window-tab-detail">{{ selectedPlayer.gameName }}#{{ selectedPlayer.tagLine }}</span>
+      </div>
+      <div class="window-drag-space"></div>
+      <div class="window-connection" :class="store.activeConnection?.health ?? 'unavailable'">
+        <span class="status-dot"></span>
+        {{ store.activeConnection ? `${store.activeConnection.serverId} · 已连接` : '等待客户端' }}
+      </div>
+      <div class="window-controls">
+        <button type="button" aria-label="最小化" title="最小化" @click="controlWindow('minimize')"><Subtract20Regular /></button>
+        <button type="button" :aria-label="windowMaximized ? '还原' : '最大化'" :title="windowMaximized ? '还原' : '最大化'" @click="controlWindow('toggle-maximize')">
+          <SquareMultiple20Regular v-if="windowMaximized" /><Maximize20Regular v-else />
+        </button>
+        <button type="button" class="window-close" aria-label="关闭" title="关闭" @click="controlWindow('close')"><Dismiss20Regular /></button>
+      </div>
+    </div>
     <aside class="sidebar">
       <div class="brand"><span class="brand-mark">L</span><div><strong>LCU Watchdog</strong><small>PLAYER MONITOR</small></div></div>
       <nav>
@@ -47,15 +66,48 @@
       </section>
 
       <section v-else-if="page === 'players'">
-        <div class="toolbar"><span>Riot ID 会通过本机 Riot Client 解析为 PUUID</span><n-button type="primary" @click="openAddPlayer">添加玩家</n-button></div>
-        <div v-if="!config.players.length" class="panel empty-state tall">尚未配置玩家。添加后会在 5 秒内进行首次查询。</div>
-        <div class="player-grid">
-          <article v-for="player in config.players" :key="player.id" class="player-card">
-            <div class="player-head"><div class="avatar">{{ player.gameName.slice(0, 1).toUpperCase() }}</div><div><h3>{{ player.gameName }}<small>#{{ player.tagLine }}</small></h3><p>{{ serverName(player.serverId) }} · {{ shortPuuid(player.puuid) }}</p></div><n-switch :value="player.enabled" @update:value="togglePlayer(player, $event)" /></div>
-            <div class="runtime-line"><span :class="{ running: runtime(player.id).running }"></span>{{ runtime(player.id).running ? '查询中' : runtime(player.id).lastError || `下次：${formatTime(runtime(player.id).nextRunAt)}` }}</div>
-            <div class="player-actions"><n-button size="small" @click="runPlayer(player.id)">立即查询</n-button><n-button size="small" @click="editPolicy(player)">单独策略</n-button><n-popconfirm @positive-click="removePlayer(player.id)"><template #trigger><n-button size="small" type="error" ghost>移除</n-button></template>确认移除这个玩家？</n-popconfirm></div>
-          </article>
-        </div>
+        <template v-if="selectedPlayer">
+          <div class="detail-toolbar"><n-button quaternary @click="selectedPlayerId = null">← 返回玩家列表</n-button><n-button type="primary" :loading="runtime(selectedPlayer.id).running" @click="runPlayer(selectedPlayer.id)">刷新战绩</n-button></div>
+          <div class="player-profile-panel">
+            <div class="profile-portrait">
+              <span>{{ selectedPlayer.gameName.slice(0, 1).toUpperCase() }}</span>
+              <img v-if="selectedPlayer.profileIconId !== undefined" :src="profileIconUrl(selectedPlayer.profileIconId)" :alt="`${selectedPlayer.gameName} 头像`" @error="hideBrokenImage" />
+              <b v-if="selectedPlayer.summonerLevel !== undefined">{{ selectedPlayer.summonerLevel }}</b>
+            </div>
+            <div class="profile-copy"><span class="eyebrow">{{ serverName(selectedPlayer.serverId) }} · MONITORED PLAYER</span><h2>{{ selectedPlayer.gameName }}<small>#{{ selectedPlayer.tagLine }}</small></h2><p>{{ shortPuuid(selectedPlayer.puuid) }}</p></div>
+            <div class="profile-status"><span :class="{ live: runtime(selectedPlayer.id).running }"></span>{{ runtime(selectedPlayer.id).running ? '正在更新' : selectedPlayer.enabled ? '监视中' : '已暂停' }}</div>
+          </div>
+          <div class="history-heading"><div><h2>最近对局</h2><p>来自当前 LCU / SGP 连接，最多保留最近 20 场</p></div><span>{{ runtime(selectedPlayer.id).recentMatches.length }} 场</span></div>
+          <div v-if="runtime(selectedPlayer.id).lastError" class="history-error">{{ runtime(selectedPlayer.id).lastError }}</div>
+          <div v-if="!runtime(selectedPlayer.id).recentMatches.length" class="panel empty-state tall">暂无历史数据。点击“刷新战绩”立即查询。</div>
+          <div v-else class="history-list">
+            <article v-for="match in runtime(selectedPlayer.id).recentMatches" :key="match.gameId" class="match-card" :class="{ win: match.win === true, loss: match.win === false }">
+              <div class="result-mark"><strong>{{ match.win === true ? '胜利' : match.win === false ? '失败' : '对局' }}</strong><span>{{ formatTime(match.startedAt) }}</span></div>
+              <div class="champion-portrait">
+                <img v-if="match.championId" :src="championIconUrl(match.championId)" :alt="match.championName || '英雄'" />
+                <span v-else>◆</span>
+              </div>
+              <div class="match-main"><strong>{{ match.championName || queueName(match.queueId) }}</strong><span>{{ queueName(match.queueId) }} · {{ match.gameMode || '未知模式' }}</span></div>
+              <div class="match-kda" v-if="match.kills !== undefined"><strong>{{ match.kills }} / {{ match.deaths ?? 0 }} / {{ match.assists ?? 0 }}</strong><span>K / D / A</span></div>
+              <div class="match-meta"><strong>{{ formatDuration(match.durationSeconds) }}</strong><span>#{{ match.gameId }}</span></div>
+            </article>
+          </div>
+        </template>
+        <template v-else>
+          <div class="toolbar"><span>选择玩家可查看资料与最近对局</span><n-button type="primary" @click="openAddPlayer">添加玩家</n-button></div>
+          <div v-if="!config.players.length" class="panel empty-state tall">尚未配置玩家。添加后会在 5 秒内进行首次查询。</div>
+          <div class="player-grid">
+            <article v-for="player in config.players" :key="player.id" class="player-card clickable" tabindex="0" @click="selectedPlayerId = player.id" @keydown.enter="selectedPlayerId = player.id">
+              <div class="player-head">
+                <div class="avatar profile-avatar"><span>{{ player.gameName.slice(0, 1).toUpperCase() }}</span><img v-if="player.profileIconId !== undefined" :src="profileIconUrl(player.profileIconId)" :alt="`${player.gameName} 头像`" @error="hideBrokenImage" /><b v-if="player.summonerLevel !== undefined">{{ player.summonerLevel }}</b></div>
+                <div><h3>{{ player.gameName }}<small>#{{ player.tagLine }}</small></h3><p>{{ serverName(player.serverId) }} · 等级 {{ player.summonerLevel ?? '—' }}</p></div>
+                <n-switch :value="player.enabled" @click.stop @update:value="togglePlayer(player, $event)" />
+              </div>
+              <div class="runtime-line"><span :class="{ running: runtime(player.id).running }"></span>{{ runtime(player.id).running ? '查询中' : runtime(player.id).lastError || `下次：${formatTime(runtime(player.id).nextRunAt)}` }}</div>
+              <div class="player-actions" @click.stop><n-button size="small" @click="runPlayer(player.id)">立即查询</n-button><n-button size="small" @click="editPolicy(player)">单独策略</n-button><n-popconfirm @positive-click="removePlayer(player.id)"><template #trigger><n-button size="small" type="error" ghost>移除</n-button></template>确认移除这个玩家？</n-popconfirm></div>
+            </article>
+          </div>
+        </template>
       </section>
 
       <section v-else-if="page === 'schedule'" class="settings-stack">
@@ -78,15 +130,23 @@
 
       <section v-else-if="page === 'events'" class="settings-stack">
         <div class="panel form-panel">
-          <div class="panel-title"><div><h2>HTTP POST Webhook</h2><p>敏感请求头由 Windows safeStorage 加密，渲染进程不会读回明文</p></div><n-switch v-model:value="config.webhook.enabled" /></div>
-          <n-form-item label="Webhook URL"><n-input v-model:value="config.webhook.url" placeholder="https://example.com/webhook" /></n-form-item>
-          <div class="header-list"><div v-for="header in config.webhook.headers" :key="header.id" class="header-row"><n-input v-model:value="header.name" placeholder="Header 名称" /><n-input v-model:value="header.value" :type="header.secret ? 'password' : 'text'" :placeholder="header.configured && header.secret ? '已安全保存；留空保持不变' : '值'" /><n-checkbox v-model:checked="header.secret">敏感</n-checkbox><n-button quaternary type="error" @click="removeHeader(header.id)">删除</n-button></div></div>
-          <n-button size="small" dashed @click="addHeader">添加请求头</n-button>
+          <div class="panel-title"><div><h2>Webhook 推送</h2><p>默认适配 Server酱，也可切换为通用 JSON POST</p></div><n-switch v-model:value="config.webhook.enabled" /></div>
+          <n-form-item label="服务类型"><n-select v-model:value="config.webhook.provider" :options="webhookProviderOptions" /></n-form-item>
+          <template v-if="config.webhook.provider === 'serverchan'">
+            <n-alert type="info" :show-icon="false" class="provider-note">使用 Server酱 Turbo：事件将以 title + Markdown desp 推送。<a href="https://sct.ftqq.com/sendkey/" target="_blank" rel="noreferrer">获取 SendKey</a></n-alert>
+            <n-form-item label="SendKey"><n-input v-model:value="config.webhook.sendKey" type="password" show-password-on="click" :placeholder="config.webhook.sendKeyConfigured ? '已通过 Windows 安全存储保存；留空保持不变' : 'SCT 开头的 SendKey'" /></n-form-item>
+            <p v-if="config.webhook.sendKeyConfigured && !config.webhook.sendKey" class="secret-status">✓ SendKey 已通过 Windows 安全存储加密保存</p>
+          </template>
+          <template v-else>
+            <n-form-item label="Webhook URL"><n-input v-model:value="config.webhook.url" placeholder="https://example.com/webhook" /></n-form-item>
+            <div class="header-list"><div v-for="header in config.webhook.headers" :key="header.id" class="header-row"><n-input v-model:value="header.name" placeholder="Header 名称" /><n-input v-model:value="header.value" :type="header.secret ? 'password' : 'text'" :placeholder="header.configured && header.secret ? '已安全保存；留空保持不变' : '值'" /><n-checkbox v-model:checked="header.secret">敏感</n-checkbox><n-button quaternary type="error" @click="removeHeader(header.id)">删除</n-button></div></div>
+            <n-button size="small" dashed @click="addHeader">添加请求头</n-button>
+          </template>
         </div>
         <div v-for="type in eventTypes" :key="type" class="panel form-panel">
           <div class="panel-title"><div><h2>{{ type === 'ongoing_game_detected' ? '进行中游戏事件' : '新增历史对局事件' }}</h2><p>{{ type }}</p></div><n-button size="small" @click="test(type, 'all')">测试全部通道</n-button></div>
           <div class="form-row switches"><n-checkbox v-model:checked="config.events[type].webhookEnabled">发送 Webhook</n-checkbox><n-checkbox v-model:checked="config.events[type].notificationEnabled">Windows 应用通知</n-checkbox></div>
-          <n-form-item label="Webhook JSON 模板"><n-input v-model:value="config.events[type].webhookTemplate" type="textarea" :autosize="{ minRows: 3, maxRows: 10 }" /></n-form-item>
+          <n-form-item :label="config.webhook.provider === 'serverchan' ? 'Server酱消息模板（JSON）' : 'Webhook JSON 模板'"><n-input v-model:value="config.events[type].webhookTemplate" type="textarea" :autosize="{ minRows: 3, maxRows: 10 }" /></n-form-item>
           <div class="form-row"><n-form-item label="通知标题"><n-input v-model:value="config.events[type].notificationTitle" /></n-form-item><n-form-item label="通知正文"><n-input v-model:value="config.events[type].notificationBody" /></n-form-item></div>
           <p class="template-help">变量：eventJson、eventType、playerRiotId、playerPuuid、serverId、gameId、queueId、gameMode、occurredAt</p>
         </div>
@@ -112,9 +172,12 @@
 
     <n-modal v-model:show="showAdd" preset="card" title="添加监视玩家" class="modal-card">
       <n-form label-placement="top">
-        <div class="form-row"><n-form-item label="Riot ID 名称"><n-input v-model:value="draft.gameName" placeholder="玩家名称" /></n-form-item><n-form-item label="标签"><n-input v-model:value="draft.tagLine" placeholder="例如 JP1" /></n-form-item></div>
-        <n-form-item label="服务器"><n-select v-model:value="draft.serverId" filterable :options="serverOptions" /></n-form-item>
-        <n-collapse><n-collapse-item title="高级：直接填写 PUUID"><n-input v-model:value="draft.puuid" placeholder="填写后跳过 Riot ID 到 PUUID 的解析，但仍会验证服务器" /></n-collapse-item></n-collapse>
+        <n-form-item label="Riot ID">
+          <n-input v-model:value="riotIdInput" placeholder="游戏名#标签" @keyup.enter="addPlayer" />
+          <template #feedback>名称和标签使用 # 分隔，可直接从客户端或战绩网站复制。</template>
+        </n-form-item>
+        <n-alert type="info" :show-icon="false">服务器将自动使用当前活动的 LCU / SGP 连接。</n-alert>
+        <n-collapse><n-collapse-item title="高级：直接填写 PUUID"><n-input v-model:value="draft.puuid" placeholder="填写后跳过 Riot ID 解析，并使用当前连接服务器" /></n-collapse-item></n-collapse>
       </n-form>
       <template #footer><div class="modal-actions"><n-button @click="showAdd = false">取消</n-button><n-button type="primary" :loading="store.loading" @click="addPlayer">解析并添加</n-button></div></template>
     </n-modal>
@@ -135,9 +198,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
+import Dismiss20Regular from '@vicons/fluent/es/Dismiss20Regular'
+import Maximize20Regular from '@vicons/fluent/es/Maximize20Regular'
+import SquareMultiple20Regular from '@vicons/fluent/es/SquareMultiple20Regular'
+import Subtract20Regular from '@vicons/fluent/es/Subtract20Regular'
 import { DEFAULT_POLICY, QUEUE_PRESETS, newPlayerRuntime } from '@shared/defaults'
+import { parseRiotId } from '@shared/riot-id'
 import { LEAGUE_SERVERS } from '@shared/servers'
 import type { AppConfig, PlayerDraft, PlayerTarget, WatchEventType } from '@shared/types'
 import { useWatchdogStore } from '../store'
@@ -146,10 +214,14 @@ const store = useWatchdogStore()
 const message = useMessage()
 const page = ref('overview')
 const config = ref<AppConfig | null>(null)
+const configDirty = ref(false)
 const showAdd = ref(false)
 const showPolicy = ref(false)
 const editingPlayer = ref<PlayerTarget | null>(null)
+const selectedPlayerId = ref<string | null>(null)
+const windowMaximized = ref(false)
 const draft = ref<PlayerDraft>({ gameName: '', tagLine: '', serverId: 'JP', puuid: '' })
+const riotIdInput = ref('')
 const eventTypes: WatchEventType[] = ['ongoing_game_detected', 'new_match_detected']
 const pages = [
   { key: 'overview', icon: '⌂', label: '总览', description: '连接状态、调度进度与最近事件' },
@@ -160,36 +232,85 @@ const pages = [
 ]
 const currentPage = computed(() => pages.find((item) => item.key === page.value) ?? pages[0]!)
 const enabledPlayers = computed(() => config.value?.players.filter((player) => player.enabled).length ?? 0)
-const serverOptions = LEAGUE_SERVERS.map((server) => ({ label: `${server.name} (${server.id})`, value: server.id }))
+const selectedPlayer = computed(() => config.value?.players.find((player) => player.id === selectedPlayerId.value) ?? null)
 const queueOptions = QUEUE_PRESETS.map((queue) => ({ label: `${queue.label} (${queue.value})`, value: queue.value }))
+const webhookProviderOptions = [{ label: 'Server酱（推荐）', value: 'serverchan' }, { label: '通用 JSON Webhook', value: 'generic' }]
 const connectionOptions = computed(() => store.snapshot?.connections.map((item) => ({ label: `${item.serverId} · PID ${item.pid}`, value: item.pid })) ?? [])
 
 const cloneJson = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
-watch(() => store.snapshot?.config, (value) => { if (value) config.value = cloneJson(value) }, { deep: true, immediate: true })
+let syncingConfig = false
+function replaceLocalConfig(value: AppConfig) {
+  syncingConfig = true
+  config.value = cloneJson(value)
+  configDirty.value = false
+  void nextTick(() => { syncingConfig = false })
+}
+watch(() => store.snapshot?.config, (value) => {
+  if (value && (!config.value || !configDirty.value)) replaceLocalConfig(value)
+}, { deep: true, immediate: true })
+watch(config, () => { if (!syncingConfig) configDirty.value = true }, { deep: true })
 
 let removeNavigation: (() => void) | null = null
+let removeWindowMaximized: (() => void) | null = null
 onMounted(async () => {
   await store.init()
-  removeNavigation = window.watchdog.onNavigatePlayer(() => { page.value = 'players' })
+  removeNavigation = window.watchdog.onNavigatePlayer((playerId) => { page.value = 'players'; selectedPlayerId.value = playerId })
+  removeWindowMaximized = window.watchdog.onWindowMaximized((maximized) => { windowMaximized.value = maximized })
 })
-onBeforeUnmount(() => removeNavigation?.())
+onBeforeUnmount(() => { removeNavigation?.(); removeWindowMaximized?.() })
 
 function runtime(id: string) { return store.snapshot?.runtime.players[id] ?? newPlayerRuntime() }
 function serverName(id: string) { return LEAGUE_SERVERS.find((server) => server.id === id)?.name ?? id }
 function shortPuuid(value: string) { return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value }
 function formatTime(value: string | null | undefined) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '未计划' }
+function formatDuration(value: number | undefined) {
+  if (!value || value < 0) return '时长未知'
+  return `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, '0')}`
+}
+function queueName(queueId: number) { return QUEUE_PRESETS.find((queue) => queue.value === queueId)?.label ?? `队列 ${queueId}` }
+function profileIconUrl(iconId: number) { return `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/profile-icons/${iconId}.jpg` }
+function championIconUrl(championId: number) { return `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/${championId}.png` }
+function hideBrokenImage(event: unknown) {
+  const image = (event as { currentTarget?: { style: { display: string } } }).currentTarget
+  if (image) image.style.display = 'none'
+}
 
 async function guard(task: () => Promise<unknown>, success?: string) {
   try { await task(); if (success) message.success(success) }
   catch (error) { message.error(error instanceof Error ? error.message : String(error)) }
 }
-async function save() { if (config.value) await guard(() => store.saveConfig(cloneJson(config.value!)), '设置已保存') }
+async function save(): Promise<boolean> {
+  if (!config.value) return false
+  try {
+    await store.saveConfig(cloneJson(config.value))
+    if (store.snapshot?.config) replaceLocalConfig(store.snapshot.config)
+    message.success('设置已保存')
+    return true
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+    return false
+  }
+}
 async function runAll() { await guard(() => store.runNow(), '查询已完成') }
 async function runPlayer(id: string) { await guard(() => store.runNow(id), '查询已完成') }
 async function selectConnection(pid: number | null) { if (config.value) config.value.selectedConnectionPid = pid; await guard(() => store.selectConnection(pid), '活动客户端已更新') }
-function openAddPlayer() { draft.value = { gameName: '', tagLine: '', serverId: store.activeConnection?.serverId ?? 'JP', puuid: '' }; showAdd.value = true }
-async function addPlayer() { await guard(async () => { await store.addPlayer(cloneJson(draft.value)); showAdd.value = false }, '玩家已添加') }
+function openAddPlayer() {
+  draft.value = { gameName: '', tagLine: '', serverId: store.activeConnection?.serverId ?? 'JP', puuid: '' }
+  riotIdInput.value = ''
+  showAdd.value = true
+}
+async function addPlayer() {
+  await guard(async () => {
+    const parsed = parseRiotId(riotIdInput.value)
+    if (!draft.value.puuid?.trim() && !parsed) throw new Error('请输入完整 Riot ID（游戏名#标签）')
+    if (riotIdInput.value.trim() && !parsed) throw new Error('Riot ID 格式不正确，名称和标签之间需要一个 #')
+    draft.value.gameName = parsed?.gameName ?? ''
+    draft.value.tagLine = parsed?.tagLine ?? ''
+    await store.addPlayer(cloneJson(draft.value))
+    showAdd.value = false
+  }, '玩家已添加')
+}
 async function removePlayer(id: string) { await guard(() => store.removePlayer(id), '玩家已移除') }
 async function togglePlayer(player: PlayerTarget, enabled: boolean) { await guard(() => store.updatePlayer({ ...cloneJson(player), enabled }), enabled ? '已开始监视' : '已暂停监视') }
 function editPolicy(player: PlayerTarget) { editingPlayer.value = cloneJson(player); showPolicy.value = true }
@@ -201,5 +322,12 @@ function setGlobalInterval(value: number | null) { if (config.value && value) co
 function setGlobalJitter(value: number | null) { if (config.value && value !== null) config.value.globalPolicy.jitterMs = value * 1_000 }
 function addHeader() { config.value?.webhook.headers.push({ id: crypto.randomUUID(), name: '', value: '', secret: true, configured: false }) }
 function removeHeader(id: string) { if (config.value) config.value.webhook.headers = config.value.webhook.headers.filter((header) => header.id !== id) }
-async function test(type: WatchEventType, channel: 'all' | 'webhook' | 'notification') { await save(); const result = await store.testEvent({ type, channel }); if (result.ok) message.success(result.message); else message.error(result.message) }
+async function test(type: WatchEventType, channel: 'all' | 'webhook' | 'notification') {
+  if (!(await save())) return
+  const result = await store.testEvent({ type, channel })
+  if (result.ok) message.success(result.message); else message.error(result.message)
+}
+async function controlWindow(action: 'minimize' | 'toggle-maximize' | 'close') {
+  windowMaximized.value = await window.watchdog.windowControl(action)
+}
 </script>

@@ -4,6 +4,7 @@ import { HttpStatusError, requestLocalJson } from './lcu/http'
 
 interface SessionTokens { pid: number; entitlement: string; leagueSession: string }
 interface AliasResult { puuid: string; alias?: { game_name?: string; tag_line?: string } }
+interface SummonerProfile { profileIconId?: number; summonerLevel?: number }
 
 export class GameDataClient {
   private tokens: SessionTokens | null = null
@@ -13,14 +14,10 @@ export class GameDataClient {
     this.spectator = new SpectatorBatcher(getConnection)
   }
 
-  async resolvePlayer(draft: PlayerDraft): Promise<{ puuid: string; gameName: string; tagLine: string }> {
+  async resolvePlayer(draft: PlayerDraft): Promise<{
+    puuid: string; gameName: string; tagLine: string; serverId: string; profileIconId?: number; summonerLevel?: number
+  }> {
     const connection = this.requireConnection()
-    const currentServer = getServer(connection.serverId)
-    const targetServer = getServer(draft.serverId)
-    if (!targetServer) throw new Error(`不支持服务器 ${draft.serverId}`)
-    if (targetServer.id !== currentServer?.id && !(targetServer.isTencent && currentServer?.isTencent)) {
-      throw new Error('国际服只能添加当前客户端所在服务器的玩家')
-    }
 
     let puuid = draft.puuid?.trim() ?? ''
     let gameName = draft.gameName.trim()
@@ -36,15 +33,24 @@ export class GameDataClient {
       tagLine = alias.alias?.tag_line || tagLine
     }
 
-    if (targetServer.id === currentServer?.id) {
-      await requestLocalJson(connection, `/lol-summoner/v2/summoners/puuid/${encodeURIComponent(puuid)}`)
-    } else {
-      const summoners = await this.requestSgp<unknown[]>(targetServer.id, 'league-session', '/summoner-ledge/v1/regions/{region}/summoners/puuids', {
-        method: 'POST', body: [puuid]
-      })
-      if (!summoners.length) throw new Error('该玩家不在所选腾讯大区')
+    const profile = await this.getPlayerProfile(puuid)
+
+    return {
+      puuid,
+      gameName: gameName || 'PUUID',
+      tagLine: tagLine || puuid.slice(0, 6),
+      serverId: connection.serverId,
+      ...(Number.isInteger(profile.profileIconId) ? { profileIconId: profile.profileIconId } : {}),
+      ...(Number.isInteger(profile.summonerLevel) ? { summonerLevel: profile.summonerLevel } : {})
     }
-    return { puuid, gameName: gameName || 'PUUID', tagLine: tagLine || puuid.slice(0, 6) }
+  }
+
+  async getPlayerProfile(puuid: string): Promise<SummonerProfile> {
+    try {
+      return await requestLocalJson<SummonerProfile>(
+        this.requireConnection(), `/lol-summoner/v2/summoners/puuid/${encodeURIComponent(puuid)}`
+      )
+    } catch { return {} }
   }
 
   async getHistory(puuid: string, serverId: string): Promise<{ source: 'lcu-history' | 'sgp-history'; matches: MatchInfo[] }> {
@@ -52,11 +58,11 @@ export class GameDataClient {
     if (serverId === connection.serverId) {
       const params = new URLSearchParams({ begIndex: '0', endIndex: '19' })
       const data = await requestLocalJson<unknown>(connection, `/lol-match-history/v1/products/lol/${encodeURIComponent(puuid)}/matches?${params}`)
-      return { source: 'lcu-history', matches: normalizeMatches(data).slice(0, 20) }
+      return { source: 'lcu-history', matches: normalizeMatches(data, puuid).slice(0, 20) }
     }
     this.ensureCrossRegionAllowed(connection.serverId, serverId)
     const data = await this.requestSgp<unknown>(serverId, 'entitlement', `/match-history-query/v1/products/lol/player/${encodeURIComponent(puuid)}/SUMMARY?startIndex=0&count=20`)
-    return { source: 'sgp-history', matches: normalizeMatches(data).slice(0, 20) }
+    return { source: 'sgp-history', matches: normalizeMatches(data, puuid).slice(0, 20) }
   }
 
   async getOngoing(puuid: string, serverId: string): Promise<MatchInfo | null> {
@@ -178,7 +184,7 @@ class SpectatorBatcher {
   }
 }
 
-export function normalizeMatches(input: unknown): MatchInfo[] {
+export function normalizeMatches(input: unknown, puuid?: string): MatchInfo[] {
   const root = input as any
   const games: any[] = Array.isArray(root?.games?.games) ? root.games.games : Array.isArray(root?.games) ? root.games : []
   return games.map((entry) => {
@@ -186,12 +192,26 @@ export function normalizeMatches(input: unknown): MatchInfo[] {
     const matchId = entry?.metadata?.match_id ?? game?.gameId ?? game?.game_id ?? ''
     const gameId = String(matchId).includes('_') ? String(matchId).split('_').at(-1) ?? String(matchId) : String(matchId)
     const timestamp = Number(game?.gameStartTimestamp ?? game?.gameCreation ?? game?.game_datetime ?? 0)
+    const identities: any[] = Array.isArray(game?.participantIdentities) ? game.participantIdentities : []
+    const participants: any[] = Array.isArray(game?.participants) ? game.participants : []
+    const identity = puuid ? identities.find((item) => item?.player?.puuid === puuid) : null
+    const participant = puuid
+      ? participants.find((item) => item?.puuid === puuid || (identity && item?.participantId === identity.participantId))
+      : null
+    const stats = participant?.stats ?? participant ?? {}
+    const championId = Number(participant?.championId ?? 0)
     return {
       gameId,
       queueId: Number(game?.queueId ?? game?.queue_id ?? game?.queue ?? 0),
       gameMode: String(game?.gameMode ?? game?.game_mode ?? ''),
       startedAt: timestamp > 0 ? new Date(timestamp).toISOString() : null,
-      ...(Number(game?.gameDuration) > 0 ? { durationSeconds: Number(game.gameDuration) } : {})
+      ...(Number(game?.gameDuration) > 0 ? { durationSeconds: Number(game.gameDuration) } : {}),
+      ...(championId > 0 ? { championId } : {}),
+      ...(participant?.championName ? { championName: String(participant.championName) } : {}),
+      ...(typeof stats.win === 'boolean' ? { win: stats.win } : {}),
+      ...(Number.isFinite(Number(stats.kills)) ? { kills: Number(stats.kills) } : {}),
+      ...(Number.isFinite(Number(stats.deaths)) ? { deaths: Number(stats.deaths) } : {}),
+      ...(Number.isFinite(Number(stats.assists)) ? { assists: Number(stats.assists) } : {})
     }
   }).filter((game) => game.gameId)
 }

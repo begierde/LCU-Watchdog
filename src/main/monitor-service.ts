@@ -81,13 +81,12 @@ export class MonitorService {
   }
 
   async createTestEvent(request: TestEventRequest): Promise<WatchEvent> {
-    const player = this.configStore.getPrivate().players[0] ?? {
-      id: 'test-player', gameName: '示例玩家', tagLine: 'TEST', puuid: 'test-puuid', serverId: 'JP', enabled: true,
+    const player: PlayerTarget = {
+      id: '测试', gameName: '测试', tagLine: '测试', puuid: '测试', serverId: '测试', enabled: true,
       overridePolicy: null, createdAt: new Date().toISOString()
     }
     return this.events.dispatch(this.makeEvent(request.type, player, {
-      gameId: '1234567890', queueId: request.type === 'new_match_detected' ? 440 : 420,
-      gameMode: 'CLASSIC', startedAt: new Date().toISOString()
+      gameId: '测试', queueId: 0, gameMode: '测试', startedAt: null
     }, 'test'), request.channel)
   }
 
@@ -113,6 +112,7 @@ export class MonitorService {
 
     try {
       await this.semaphore.use(async () => {
+        await this.refreshPlayerProfile(player)
         const policy = player.overridePolicy ?? this.configStore.getPrivate().globalPolicy
         const [history, ongoing] = await Promise.allSettled([
           this.gameData.getHistory(player.puuid, player.serverId),
@@ -140,8 +140,23 @@ export class MonitorService {
 
   private async processHistory(player: PlayerTarget, matches: MatchInfo[], source: 'lcu-history' | 'sgp-history', policy: MonitorPolicy): Promise<void> {
     const runtime = this.runtimeStore.player(player.id)
+    runtime.recentMatches = matches.slice(0, 20)
     const newMatches = reconcileHistory(runtime, matches, player.serverId, policy.history)
     for (const match of [...newMatches].reverse()) await this.events.dispatch(this.makeEvent('new_match_detected', player, match, source))
+  }
+
+  private async refreshPlayerProfile(player: PlayerTarget): Promise<void> {
+    if (player.profileIconId !== undefined && player.summonerLevel !== undefined) return
+    const profile = await this.gameData.getPlayerProfile(player.puuid)
+    if (profile.profileIconId === undefined && profile.summonerLevel === undefined) return
+    const config = this.configStore.getPrivate()
+    const stored = config.players.find((item) => item.id === player.id)
+    if (!stored) return
+    if (profile.profileIconId !== undefined) stored.profileIconId = profile.profileIconId
+    if (profile.summonerLevel !== undefined) stored.summonerLevel = profile.summonerLevel
+    Object.assign(player, profile)
+    await this.configStore.save(config)
+    this.onChange()
   }
 
   private async processOngoing(player: PlayerTarget, game: MatchInfo, policy: MonitorPolicy): Promise<void> {

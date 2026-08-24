@@ -9,7 +9,15 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
-    resolve: { alias: { '@shared': resolve('src/shared') } }
+    resolve: { alias: { '@shared': resolve('src/shared') } },
+    build: {
+      rollupOptions: {
+        output: {
+          format: 'cjs',
+          entryFileNames: 'index.cjs'
+        }
+      }
+    }
   },
   renderer: {
     resolve: {
@@ -21,4 +29,3 @@ export default defineConfig({
     plugins: [vue()]
   }
 })
-
