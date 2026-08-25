@@ -11,6 +11,7 @@ await mkdir(artifacts, { recursive: true })
 const errors = []
 let electronApp
 const playerDetailMode = process.argv.includes('--player-detail')
+const packagedMode = process.argv.includes('--packaged')
 
 const assert = (condition, message) => { if (!condition) throw new Error(message) }
 
@@ -39,9 +40,11 @@ try {
       } }, recentEvents: [], diagnostics: []
     }))
   }
+  const packagedExecutable = path.join(root, 'release', 'win-unpacked', 'LCU Watchdog.exe')
   electronApp = await electron.launch({
-    cwd: root,
-    args: ['.', `--user-data-dir=${userData}`],
+    ...(packagedMode ? { executablePath: packagedExecutable } : {}),
+    cwd: packagedMode ? path.dirname(packagedExecutable) : root,
+    args: packagedMode ? [`--user-data-dir=${userData}`] : ['.', `--user-data-dir=${userData}`],
     env: { ...process.env, LCU_WATCHDOG_QA: '1' }
   })
   const window = await electronApp.firstWindow()
@@ -63,9 +66,9 @@ try {
   }))
   assert(launched.width >= 980 && launched.height >= 600, `unexpected launch viewport ${launched.width}x${launched.height}`)
   assert(launched.scrollWidth <= launched.width, 'overview has horizontal overflow')
-  assert(launched.nav.length === 5, 'expected five navigation pages')
+  assert(launched.nav.length === 3, 'expected three primary navigation pages')
   assert(launched.titlebar?.height === 44, 'custom title bar should be 44px high')
-  assert(launched.titlebar?.left === 224, 'custom title bar should align after the sidebar')
+  assert(launched.titlebar?.left === 208, 'custom title bar should align after the sidebar')
   assert(await window.getByRole('button', { name: '最小化' }).count() === 1, 'minimize control missing')
   assert(await window.getByRole('button', { name: '最大化' }).count() === 1, 'maximize control missing')
   assert(await window.getByRole('button', { name: '关闭' }).count() === 1, 'close control missing')
@@ -84,42 +87,51 @@ try {
   await window.getByRole('button', { name: '添加玩家' }).click()
   await window.getByText('添加监视玩家', { exact: true }).waitFor()
   assert(await window.getByPlaceholder('游戏名#标签').count() === 1, 'single Riot ID field missing')
+  assert(await window.getByPlaceholder('游戏名#标签').evaluate((element) => element === document.activeElement), 'Riot ID input should receive initial focus')
   assert(await window.getByText('sweets#7すき', { exact: true }).count() === 0, 'legacy Riot ID example is still visible')
-  await window.getByRole('button', { name: '取消' }).click()
+  await window.keyboard.press('Escape')
+  await window.getByText('添加监视玩家', { exact: true }).waitFor({ state: 'hidden' })
+  await window.screenshot({ path: path.join(artifacts, 'players.png') })
 
   if (playerDetailMode) {
-    assert(await window.getByText(/等级 287/).isVisible(), 'summoner level missing from player card')
+    assert(await window.getByText(/等级 287/).isVisible(), 'summoner level missing from player row')
     assert(await window.locator('.profile-avatar img').count() === 1, 'profile icon missing from player card')
-    await window.locator('.player-card').click()
-    await window.getByText('最近对局', { exact: true }).waitFor()
-    assert(await window.locator('.match-card').count() === 2, 'match history cards missing')
+    await window.locator('.player-row-main').click()
+    await window.getByRole('tab', { name: '对局记录' }).waitFor()
+    assert(await window.locator('.match-row').count() === 2, 'match history rows missing')
     assert(await window.getByText('8 / 2 / 11', { exact: true }).isVisible(), 'KDA missing from match card')
-    await window.waitForFunction(() => [...document.querySelectorAll('.player-profile-panel img,.match-card img')].every((image) => image.complete), undefined, { timeout: 5_000 })
+    assert(await window.getByRole('tab', { name: /Visual Player/ }).count() === 1, 'player title tab missing')
+    await window.waitForFunction(() => [...document.querySelectorAll('.player-profile-panel img,.match-row img')].every((image) => image.complete), undefined, { timeout: 5_000 })
     await window.screenshot({ path: path.join(artifacts, 'player-detail.png') })
   }
 
-  await window.getByRole('button', { name: '周期与模式' }).click()
-  await window.getByText('全局查询周期', { exact: true }).waitFor()
-  assert(await window.getByText('历史记录模式', { exact: true }).isVisible(), 'history mode panel missing')
-
-  await window.getByRole('button', { name: '事件' }).click()
-  await window.getByText('Webhook 推送', { exact: true }).waitFor()
+  await window.getByRole('button', { name: '设置' }).click()
+  await window.getByText('查询周期', { exact: true }).waitFor()
+  assert(await window.getByText('历史记录', { exact: true }).isVisible(), 'history mode panel missing')
+  await window.screenshot({ path: path.join(artifacts, 'monitoring-settings.png') })
+  await window.getByRole('tab', { name: '事件通知' }).click()
+  await window.getByText('Webhook', { exact: true }).first().waitFor()
+  await window.locator('.advanced-settings > summary').click()
   assert(await window.getByPlaceholder('SCT 开头的 SendKey').count() === 1, 'ServerChan SendKey field missing')
-  assert(await window.locator('a[href="https://sct.ftqq.com/sendkey/"]').count() === 1, 'ServerChan SendKey help link missing')
-  assert(await window.getByText('Server酱消息模板（JSON）', { exact: true }).count() === 2, 'ServerChan event templates missing')
+  assert(await window.locator('.template-editor').count() === 2, 'ServerChan event templates missing')
   const sendKeyInput = window.getByPlaceholder('SCT 开头的 SendKey')
-  const webhookPanel = window.locator('.panel').filter({ hasText: 'Webhook 推送' })
   await sendKeyInput.fill('SCT_ui-draft')
-  await webhookPanel.locator('.n-switch').click()
-  await window.getByText('发送 Webhook', { exact: true }).first().click()
+  await window.getByLabel('启用 Webhook').click()
+  await window.locator('.event-config').first().getByText('Webhook', { exact: true }).click()
   await window.waitForTimeout(2_500)
   assert(await sendKeyInput.inputValue() === 'SCT_ui-draft', 'periodic snapshot cleared the unsaved SendKey')
-  assert(await webhookPanel.locator('.n-switch').getAttribute('aria-checked') === 'true', 'periodic snapshot reverted the Webhook switch')
+  assert(await window.getByLabel('启用 Webhook').getAttribute('aria-checked') === 'true', 'periodic snapshot reverted the Webhook switch')
+  assert(await window.getByText('有未保存的更改', { exact: true }).isVisible(), 'sticky save bar missing')
+  assert(await window.getByRole('button', { name: '测试此事件' }).first().isDisabled(), 'event test should be disabled for dirty settings')
+  await window.getByRole('button', { name: '玩家' }).click()
+  await window.getByText('设置尚未保存', { exact: true }).waitFor()
+  await window.getByRole('button', { name: '继续编辑' }).click()
   await window.screenshot({ path: path.join(artifacts, 'events.png'), fullPage: true })
-
-  await window.getByRole('button', { name: '应用设置' }).click()
-  await window.getByText('关闭窗口行为', { exact: true }).waitFor()
-  assert(await window.getByText(/原生模块/).isVisible(), 'native diagnostics status missing')
+  await window.getByRole('button', { name: '放弃更改' }).click()
+  await window.getByRole('tab', { name: '应用' }).click()
+  await window.getByText('窗口', { exact: true }).waitFor()
+  assert(await window.locator('.status-tags').getByText(/原生模块/).isVisible(), 'native module status missing')
+  await window.screenshot({ path: path.join(artifacts, 'application-settings.png') })
 
   await window.setViewportSize({ width: 980, height: 660 })
   const minimum = await window.evaluate(() => ({
@@ -127,16 +139,18 @@ try {
     height: innerHeight,
     scrollWidth: document.documentElement.scrollWidth,
     sidebar: document.querySelector('.sidebar')?.getBoundingClientRect().toJSON(),
-    topbar: document.querySelector('.topbar')?.getBoundingClientRect().toJSON()
+    topbar: document.querySelector('.page-header')?.getBoundingClientRect().toJSON()
   }))
   assert(minimum.scrollWidth <= minimum.width, 'minimum viewport has horizontal overflow')
   assert(minimum.sidebar?.bottom <= minimum.height, 'sidebar clipped at minimum viewport')
   assert(minimum.topbar?.right <= minimum.width, 'top bar clipped at minimum viewport')
+  await window.screenshot({ path: path.join(artifacts, 'minimum-980x660.png') })
   assert(errors.length === 0, errors.join('\n'))
 
   console.log(JSON.stringify({
     ok: true,
     menuVisible,
+    packagedMode,
     playerDetailMode,
     launched,
     minimum,

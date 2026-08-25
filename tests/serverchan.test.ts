@@ -15,6 +15,11 @@ describe('ServerChan webhook', () => {
     expect(JSON.parse(request.body)).toEqual({ title: 'Player#JP1 新对局', desp: '队列 440' })
   })
 
+  it('sends a readable queue name instead of CLASSIC', () => {
+    const request = buildServerChanRequest('SCT_test-key', '{"title":"新对局","desp":"模式：{{gameMode}}（{{queueId}}）"}', event)
+    expect(JSON.parse(request.body).desp).toBe('模式：灵活组排（440）')
+  })
+
   it('enforces the 32-character title limit', () => {
     const request = buildServerChanRequest('SCT_key', `{"title":"${'x'.repeat(40)}","desp":""}`, event)
     expect(JSON.parse(request.body).title).toHaveLength(32)

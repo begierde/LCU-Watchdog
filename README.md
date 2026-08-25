@@ -41,7 +41,7 @@ npm run package:win
 
 Webhook 模板必须是合法 JSON，可使用 `{{eventJson}}` 发送完整事件，或使用以下变量组装对象：
 
-`eventId`、`eventType`、`occurredAt`、`playerRiotId`、`playerPuuid`、`serverId`、`gameId`、`queueId`、`gameMode`、`gameStartedAt`。
+`eventId`、`eventType`、`occurredAt`、`playerRiotId`、`playerPuuid`、`serverId`、`gameId`、`queueId`、`queueName`、`gameMode`、`rawGameMode`、`gameStartedAt`。其中 `gameMode` 和 `queueName` 为“单双排”“灵活组排”“极地大乱斗：混沌”等可读名称，`rawGameMode` 保留 LCU/SGP 原始值。
 
 事件类型：
 
@@ -65,4 +65,3 @@ LCU 发现、SGP 服务器映射与接口行为参考了 [League Akari](https://
 ## License
 
 MIT
-

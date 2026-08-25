@@ -19,8 +19,8 @@ const defaultEvent = (type: WatchEventType) => ({
   notificationTitle: type === 'ongoing_game_detected' ? '{{playerRiotId}} 正在游戏' : '{{playerRiotId}} 有新对局',
   notificationBody:
     type === 'ongoing_game_detected'
-      ? '队列 {{queueId}} · 对局 {{gameId}}'
-      : '发现新的队列 {{queueId}} 对局 · {{gameId}}'
+      ? '{{gameMode}} · 对局 {{gameId}}'
+      : '发现新的{{gameMode}}对局 · {{gameId}}'
 })
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -55,13 +55,15 @@ export const DEFAULT_RUNTIME: RuntimeState = {
 }
 
 export const QUEUE_PRESETS = [
+  { label: '普通征召', value: 400 },
   { label: '单双排', value: 420 },
   { label: '灵活组排', value: 440 },
   { label: '匹配模式', value: 430 },
   { label: '极地大乱斗', value: 450 },
   { label: '快速匹配', value: 490 },
+  { label: '特殊模式', value: 710 },
   { label: '斗魂竞技场', value: 1700 },
   { label: '无限火力', value: 900 },
   { label: '斗魂竞技场（双人）', value: 1750 },
-  { label: '特殊模式 2400', value: 2400 }
+  { label: '极地大乱斗：混沌', value: 2400 }
 ]

@@ -1,333 +1,103 @@
 <template>
   <div v-if="store.snapshot && config" class="app-shell">
-    <div class="window-titlebar">
-      <div class="window-tab">
-        <span class="window-tab-mark">LCU</span>
-        <strong>{{ currentPage.label }}</strong>
-        <span v-if="selectedPlayer" class="window-tab-detail">{{ selectedPlayer.gameName }}#{{ selectedPlayer.tagLine }}</span>
+    <header class="window-titlebar">
+      <div class="window-tabs" role="tablist" aria-label="已打开页面" @keydown="handleTitleTabKey">
+        <div class="title-tab system-tab" role="tab" :aria-selected="!selectedPlayer" tabindex="0" @click="navigate(primaryPage)"><component :is="currentPage.icon" /><strong>{{ currentPage.label }}</strong></div>
+        <div v-for="player in openPlayers" :key="player.id" class="title-tab player-tab" :class="{ active: selectedPlayer?.id === player.id }" role="tab" :aria-selected="selectedPlayer?.id === player.id" :tabindex="selectedPlayer?.id === player.id ? 0 : -1" @click="openPlayer(player.id)" @keydown.enter="openPlayer(player.id)" @keydown.space.prevent="openPlayer(player.id)">
+          <img v-if="player.profileIconId !== undefined" :src="profileIconUrl(player.profileIconId)" alt="" @error="hideBrokenImage"><Person20Regular v-else /><span>{{ player.gameName }}<small>#{{ player.tagLine }}</small></span><button type="button" :aria-label="`关闭 ${player.gameName} 页签`" @click.stop="closePlayer(player.id)"><Dismiss20Regular /></button>
+        </div>
       </div>
       <div class="window-drag-space"></div>
-      <div class="window-connection" :class="store.activeConnection?.health ?? 'unavailable'">
-        <span class="status-dot"></span>
-        {{ store.activeConnection ? `${store.activeConnection.serverId} · 已连接` : '等待客户端' }}
-      </div>
-      <div class="window-controls">
-        <button type="button" aria-label="最小化" title="最小化" @click="controlWindow('minimize')"><Subtract20Regular /></button>
-        <button type="button" :aria-label="windowMaximized ? '还原' : '最大化'" :title="windowMaximized ? '还原' : '最大化'" @click="controlWindow('toggle-maximize')">
-          <SquareMultiple20Regular v-if="windowMaximized" /><Maximize20Regular v-else />
-        </button>
-        <button type="button" class="window-close" aria-label="关闭" title="关闭" @click="controlWindow('close')"><Dismiss20Regular /></button>
-      </div>
-    </div>
+      <div class="window-connection" :class="store.activeConnection?.health ?? 'unavailable'"><span class="status-dot"></span>{{ store.activeConnection ? `${store.activeConnection.serverId} · 已连接` : '等待客户端' }}</div>
+      <div class="window-controls"><button type="button" aria-label="最小化" @click="controlWindow('minimize')"><Subtract20Regular /></button><button type="button" :aria-label="windowMaximized ? '还原' : '最大化'" @click="controlWindow('toggle-maximize')"><SquareMultiple20Regular v-if="windowMaximized" /><Maximize20Regular v-else /></button><button type="button" class="window-close" aria-label="关闭" @click="controlWindow('close')"><Dismiss20Regular /></button></div>
+    </header>
+
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">L</span><div><strong>LCU Watchdog</strong><small>PLAYER MONITOR</small></div></div>
-      <nav>
-        <button v-for="item in pages" :key="item.key" :class="{ active: page === item.key }" @click="page = item.key">
-          <span>{{ item.icon }}</span>{{ item.label }}
-        </button>
-      </nav>
-      <div class="connection-pill" :class="store.activeConnection?.health ?? 'unavailable'">
-        <span class="status-dot"></span>
-        <div><strong>{{ store.activeConnection ? 'LCU 已连接' : '等待客户端' }}</strong><small>{{ store.activeConnection?.serverId ?? '请启动 League Client' }}</small></div>
-      </div>
+      <div class="brand"><img class="brand-mark" :src="appIconUrl" alt=""><div><strong>LCU Watchdog</strong><small>玩家监视器</small></div></div>
+      <nav aria-label="主导航"><button v-for="item in primaryPages" :key="item.key" type="button" :class="{ active: primaryPage === item.key && !selectedPlayer }" :aria-current="primaryPage === item.key && !selectedPlayer ? 'page' : undefined" @click="navigate(item.key)"><component :is="item.icon" /><span>{{ item.label }}</span></button></nav>
+      <section class="connection-card" :class="store.activeConnection?.health ?? 'unavailable'" aria-label="客户端连接状态"><div class="connection-summary"><span class="status-dot"></span><div><strong>{{ store.activeConnection ? 'LCU 已连接' : '等待客户端' }}</strong><small>{{ store.activeConnection?.serverId ?? '请启动 League Client' }}</small></div></div><n-button size="small" block :loading="store.isPending('run-all')" :disabled="!store.activeConnection" @click="runAll"><template #icon><Play20Regular /></template>立即查询</n-button></section>
     </aside>
 
-    <main class="content">
-      <header class="topbar">
-        <div><h1>{{ currentPage.label }}</h1><p>{{ currentPage.description }}</p></div>
-        <n-button type="primary" :loading="store.loading" @click="runAll">立即查询</n-button>
-      </header>
-      <n-alert v-if="store.error" type="error" closable class="error-banner">{{ store.error }}</n-alert>
+    <main ref="contentRef" class="content">
+      <header class="page-header"><div><h1>{{ pageHeading.title }}</h1><p>{{ pageHeading.description }}</p></div><n-button v-if="primaryPage === 'players' && !selectedPlayer" type="primary" @click="openAddPlayer"><template #icon><Add20Regular /></template>添加玩家</n-button><n-button v-else-if="selectedPlayer" type="primary" :loading="store.isPending(`run-player:${selectedPlayer.id}`)" @click="runPlayer(selectedPlayer.id)"><template #icon><ArrowClockwise20Regular /></template>刷新战绩</n-button></header>
+      <n-alert v-if="store.error" type="error" closable class="error-banner">{{ recoverableErrorSummary(store.error) ?? store.error }}</n-alert>
 
-      <section v-if="page === 'overview'" class="page-grid">
-        <div class="metric-card"><span>LCU 连接</span><strong>{{ store.snapshot.connections.length }}</strong><small>{{ store.snapshot.nativeAvailable ? '原生发现模块正常' : '正在使用 CIM 回退' }}</small></div>
-        <div class="metric-card"><span>监视玩家</span><strong>{{ enabledPlayers }}</strong><small>共 {{ config.players.length }} 位玩家</small></div>
-        <div class="metric-card"><span>最近事件</span><strong>{{ store.snapshot.runtime.recentEvents.length }}</strong><small>保留最近 100 条</small></div>
-        <div class="panel span-3">
-          <div class="panel-title"><div><h2>客户端连接</h2><p>令牌仅保存在 Electron 主进程内</p></div></div>
-          <div v-if="!store.snapshot.connections.length" class="empty-state">未发现 LeagueClientUx.exe。启动并登录 League Client 后会自动连接。</div>
-          <div v-for="connection in store.snapshot.connections" :key="connection.pid" class="connection-row">
-            <span class="status-dot" :class="connection.health"></span>
-            <div><strong>{{ connection.serverId || connection.region || '未知服务器' }}</strong><small>PID {{ connection.pid }} · {{ connection.discoveryMethod === 'native' ? 'Native / NtQueryInformationProcess' : 'CIM 回退' }}</small></div>
-            <n-tag :type="connection.health === 'connected' ? 'success' : 'warning'">{{ connection.health }}</n-tag>
-            <n-button v-if="!connection.selected" size="small" @click="selectConnection(connection.pid)">使用</n-button>
-            <n-tag v-else type="info">当前</n-tag>
-          </div>
+      <section v-if="primaryPage === 'overview' && !selectedPlayer" class="overview-layout">
+        <div class="health-grid">
+          <article class="health-card primary-health" :class="store.activeConnection ? 'healthy' : 'warning'"><span>监视状态</span><strong>{{ store.activeConnection ? '运行正常' : '等待客户端' }}</strong><small>{{ store.activeConnection ? `${enabledPlayers} 位玩家已启用` : '登录 League Client 后自动恢复' }}</small></article>
+          <article class="health-card"><span>最近查询</span><strong>{{ latestRunLabel }}</strong><small>{{ runningPlayers ? `${runningPlayers} 个查询正在进行` : '无重叠调度' }}</small></article>
+          <article class="health-card"><span>下次查询</span><strong>{{ nextRunLabel }}</strong><small>周期完成后重新计算</small></article>
+          <article class="health-card"><span>最近事件</span><strong>{{ store.snapshot.runtime.recentEvents.length }}</strong><small>进行中与新增对局</small></article>
         </div>
-        <div class="panel span-3">
-          <div class="panel-title"><div><h2>最近触发事件</h2><p>进行中游戏与新增历史记录</p></div></div>
-          <div v-if="!store.snapshot.runtime.recentEvents.length" class="empty-state">还没有事件。首次历史查询只会建立基线。</div>
-          <div v-for="event in store.snapshot.runtime.recentEvents.slice(0, 12)" :key="event.eventId" class="event-row">
-            <span class="event-icon">{{ event.type === 'ongoing_game_detected' ? 'LIVE' : 'NEW' }}</span>
-            <div><strong>{{ event.player.gameName }}#{{ event.player.tagLine }}</strong><small>队列 {{ event.game.queueId }} · 对局 {{ event.game.gameId }} · {{ formatTime(event.occurredAt) }}</small></div>
-            <n-tag size="small">{{ event.source }}</n-tag>
-          </div>
+        <article v-if="restrictedPlayers.length" class="panel exception-panel"><div class="section-heading"><div><h2>需要留意</h2><p>{{ restrictedPlayers.length }} 位玩家的实时状态受限，历史记录监视仍正常</p></div><Warning20Regular /></div><button v-for="player in restrictedPlayers" :key="player.id" type="button" class="exception-row" @click="openPlayer(player.id)"><span>{{ player.gameName }}#{{ player.tagLine }}</span><small>{{ errorSummary(runtime(player.id).lastError) }}</small><ChevronRight20Regular /></button></article>
+        <div class="dashboard-grid">
+          <article class="panel events-panel"><div class="section-heading"><div><h2>最近事件</h2><p>监视器捕获到的最新变化</p></div><n-tag size="small">{{ store.snapshot.runtime.recentEvents.length }}</n-tag></div><div v-if="!store.snapshot.runtime.recentEvents.length" class="empty-state compact">还没有事件。首次历史查询只会建立基线。</div><button v-for="event in store.snapshot.runtime.recentEvents.slice(0, 8)" :key="event.eventId" type="button" class="timeline-row" @click="openPlayer(event.player.id)"><span class="timeline-marker" :class="event.type === 'ongoing_game_detected' ? 'live' : 'history'"><Pulse20Regular v-if="event.type === 'ongoing_game_detected'" /><History20Regular v-else /></span><span class="timeline-copy"><strong>{{ event.player.gameName }}#{{ event.player.tagLine }}</strong><small>{{ event.type === 'ongoing_game_detected' ? '检测到进行中游戏' : '检测到新增历史对局' }} · {{ queueDisplayName(event.game.queueId) }}</small></span><span class="timeline-meta"><strong>{{ compactTime(event.occurredAt) }}</strong><small :title="event.source">{{ eventSourceDisplayName(event.source) }}</small></span></button></article>
+          <article class="panel connection-panel"><div class="section-heading"><div><h2>客户端连接</h2><p>当前用于监视的本地会话</p></div></div><div v-if="store.activeConnection" class="active-connection"><span class="connection-orb"><Apps20Regular /></span><div><strong>{{ serverName(store.activeConnection.serverId) }}</strong><small>PID {{ store.activeConnection.pid }}</small></div><n-tag type="success">已连接</n-tag></div><div v-else class="empty-state compact">未发现 LeagueClientUx.exe</div><details class="details-block"><summary>连接详情 <ChevronDown20Regular /></summary><div class="detail-list"><span>发现方式<strong>{{ store.activeConnection?.discoveryMethod === 'native' ? '原生模块' : 'CIM 回退' }}</strong></span><span>原生模块<strong>{{ store.snapshot.nativeAvailable ? '可用' : '不可用' }}</strong></span><span>连接数量<strong>{{ store.snapshot.connections.length }}</strong></span></div></details></article>
         </div>
       </section>
 
-      <section v-else-if="page === 'players'">
-        <template v-if="selectedPlayer">
-          <div class="detail-toolbar"><n-button quaternary @click="selectedPlayerId = null">← 返回玩家列表</n-button><n-button type="primary" :loading="runtime(selectedPlayer.id).running" @click="runPlayer(selectedPlayer.id)">刷新战绩</n-button></div>
-          <div class="player-profile-panel">
-            <div class="profile-portrait">
-              <span>{{ selectedPlayer.gameName.slice(0, 1).toUpperCase() }}</span>
-              <img v-if="selectedPlayer.profileIconId !== undefined" :src="profileIconUrl(selectedPlayer.profileIconId)" :alt="`${selectedPlayer.gameName} 头像`" @error="hideBrokenImage" />
-              <b v-if="selectedPlayer.summonerLevel !== undefined">{{ selectedPlayer.summonerLevel }}</b>
-            </div>
-            <div class="profile-copy"><span class="eyebrow">{{ serverName(selectedPlayer.serverId) }} · MONITORED PLAYER</span><h2>{{ selectedPlayer.gameName }}<small>#{{ selectedPlayer.tagLine }}</small></h2><p>{{ shortPuuid(selectedPlayer.puuid) }}</p></div>
-            <div class="profile-status"><span :class="{ live: runtime(selectedPlayer.id).running }"></span>{{ runtime(selectedPlayer.id).running ? '正在更新' : selectedPlayer.enabled ? '监视中' : '已暂停' }}</div>
-          </div>
-          <div class="history-heading"><div><h2>最近对局</h2><p>来自当前 LCU / SGP 连接，最多保留最近 20 场</p></div><span>{{ runtime(selectedPlayer.id).recentMatches.length }} 场</span></div>
-          <div v-if="runtime(selectedPlayer.id).lastError" class="history-error">{{ runtime(selectedPlayer.id).lastError }}</div>
-          <div v-if="!runtime(selectedPlayer.id).recentMatches.length" class="panel empty-state tall">暂无历史数据。点击“刷新战绩”立即查询。</div>
-          <div v-else class="history-list">
-            <article v-for="match in runtime(selectedPlayer.id).recentMatches" :key="match.gameId" class="match-card" :class="{ win: match.win === true, loss: match.win === false }">
-              <div class="result-mark"><strong>{{ match.win === true ? '胜利' : match.win === false ? '失败' : '对局' }}</strong><span>{{ formatTime(match.startedAt) }}</span></div>
-              <div class="champion-portrait">
-                <img v-if="match.championId" :src="championIconUrl(match.championId)" :alt="match.championName || '英雄'" />
-                <span v-else>◆</span>
-              </div>
-              <div class="match-main"><strong>{{ match.championName || queueName(match.queueId) }}</strong><span>{{ queueName(match.queueId) }} · {{ match.gameMode || '未知模式' }}</span></div>
-              <div class="match-kda" v-if="match.kills !== undefined"><strong>{{ match.kills }} / {{ match.deaths ?? 0 }} / {{ match.assists ?? 0 }}</strong><span>K / D / A</span></div>
-              <div class="match-meta"><strong>{{ formatDuration(match.durationSeconds) }}</strong><span>#{{ match.gameId }}</span></div>
-            </article>
-          </div>
-        </template>
-        <template v-else>
-          <div class="toolbar"><span>选择玩家可查看资料与最近对局</span><n-button type="primary" @click="openAddPlayer">添加玩家</n-button></div>
-          <div v-if="!config.players.length" class="panel empty-state tall">尚未配置玩家。添加后会在 5 秒内进行首次查询。</div>
-          <div class="player-grid">
-            <article v-for="player in config.players" :key="player.id" class="player-card clickable" tabindex="0" @click="selectedPlayerId = player.id" @keydown.enter="selectedPlayerId = player.id">
-              <div class="player-head">
-                <div class="avatar profile-avatar"><span>{{ player.gameName.slice(0, 1).toUpperCase() }}</span><img v-if="player.profileIconId !== undefined" :src="profileIconUrl(player.profileIconId)" :alt="`${player.gameName} 头像`" @error="hideBrokenImage" /><b v-if="player.summonerLevel !== undefined">{{ player.summonerLevel }}</b></div>
-                <div><h3>{{ player.gameName }}<small>#{{ player.tagLine }}</small></h3><p>{{ serverName(player.serverId) }} · 等级 {{ player.summonerLevel ?? '—' }}</p></div>
-                <n-switch :value="player.enabled" @click.stop @update:value="togglePlayer(player, $event)" />
-              </div>
-              <div class="runtime-line"><span :class="{ running: runtime(player.id).running }"></span>{{ runtime(player.id).running ? '查询中' : runtime(player.id).lastError || `下次：${formatTime(runtime(player.id).nextRunAt)}` }}</div>
-              <div class="player-actions" @click.stop><n-button size="small" @click="runPlayer(player.id)">立即查询</n-button><n-button size="small" @click="editPolicy(player)">单独策略</n-button><n-popconfirm @positive-click="removePlayer(player.id)"><template #trigger><n-button size="small" type="error" ghost>移除</n-button></template>确认移除这个玩家？</n-popconfirm></div>
-            </article>
-          </div>
-        </template>
+      <section v-else-if="primaryPage === 'players' && !selectedPlayer" class="players-page">
+        <div class="list-toolbar"><span>共 {{ config.players.length }} 位玩家，{{ enabledPlayers }} 位已启用</span><span>点击玩家可在顶部页签中打开</span></div><div v-if="!config.players.length" class="panel empty-state tall">尚未配置玩家。添加后会在 5 秒内进行首次查询。</div>
+        <div v-else class="player-list"><article v-for="player in config.players" :key="player.id" class="player-row"><button type="button" class="player-row-main" @click="openPlayer(player.id)"><span class="avatar profile-avatar"><span>{{ player.gameName.slice(0, 1).toUpperCase() }}</span><img v-if="player.profileIconId !== undefined" :src="profileIconUrl(player.profileIconId)" :alt="`${player.gameName} 的召唤师头像`" @error="hideBrokenImage"><b v-if="player.summonerLevel !== undefined">{{ player.summonerLevel }}</b></span><span class="player-identity"><strong>{{ player.gameName }}<small>#{{ player.tagLine }}</small></strong><small>{{ serverName(player.serverId) }} · 等级 {{ player.summonerLevel ?? '—' }}</small></span><span class="player-status"><n-tag size="small" :type="statusMeta(player).type"><span class="status-dot" :class="statusMeta(player).key"></span>{{ statusMeta(player).label }}</n-tag><small v-if="errorSummary(runtime(player.id).lastError)">{{ errorSummary(runtime(player.id).lastError) }}</small></span><span class="schedule-meta"><small>上次</small><strong>{{ compactTime(runtime(player.id).lastRunAt) }}</strong></span><span class="schedule-meta"><small>下次</small><strong>{{ compactTime(runtime(player.id).nextRunAt) }}</strong></span></button><div class="player-row-actions"><n-switch :value="player.enabled" :aria-label="`${player.gameName} 监视开关`" @update:value="togglePlayer(player, $event)" /><n-button circle quaternary :aria-label="`立即查询 ${player.gameName}`" :loading="store.isPending(`run-player:${player.id}`)" @click="runPlayer(player.id)"><template #icon><ArrowClockwise20Regular /></template></n-button><n-dropdown trigger="click" :options="playerMenuOptions" @select="handlePlayerMenu(player, $event)"><n-button circle quaternary :aria-label="`${player.gameName} 更多操作`"><template #icon><MoreHorizontal20Regular /></template></n-button></n-dropdown></div></article></div>
       </section>
 
-      <section v-else-if="page === 'schedule'" class="settings-stack">
-        <div class="panel form-panel">
-          <div class="panel-title"><div><h2>全局查询周期</h2><p>下次延迟 = 基础周期 + 0 到随机延迟之间的正向随机值</p></div></div>
-          <div class="form-row"><n-form-item label="基础周期（分钟）"><n-input-number :value="config.globalPolicy.intervalMs / 60000" :min="1" :max="1440" @update:value="setGlobalInterval" /></n-form-item><n-form-item label="最大随机延迟（秒）"><n-input-number :value="config.globalPolicy.jitterMs / 1000" :min="0" :max="86400" @update:value="setGlobalJitter" /></n-form-item></div>
-        </div>
-        <div class="panel form-panel">
-          <div class="panel-title"><div><h2>进行中游戏模式</h2><p>Spectator 仅返回可观战玩家，随后由 SGP 获取详情</p></div></div>
-          <n-radio-group v-model:value="config.globalPolicy.ongoing.mode"><n-space><n-radio value="all">所有模式</n-radio><n-radio value="include">只包含所选队列</n-radio></n-space></n-radio-group>
-          <n-select v-if="config.globalPolicy.ongoing.mode === 'include'" v-model:value="config.globalPolicy.ongoing.queueIds" multiple filterable tag :options="queueOptions" placeholder="选择或输入队列 ID" class="queue-select" />
-        </div>
-        <div class="panel form-panel">
-          <div class="panel-title"><div><h2>历史记录模式</h2><p>默认仅监视灵活组排（队列 440）</p></div></div>
-          <n-radio-group v-model:value="config.globalPolicy.history.mode"><n-space><n-radio value="all">所有模式</n-radio><n-radio value="include">只包含所选队列</n-radio></n-space></n-radio-group>
-          <n-select v-if="config.globalPolicy.history.mode === 'include'" v-model:value="config.globalPolicy.history.queueIds" multiple filterable tag :options="queueOptions" placeholder="选择或输入队列 ID" class="queue-select" />
-        </div>
-        <div class="save-row"><n-button type="primary" :loading="store.loading" @click="save">保存周期与模式</n-button></div>
+      <section v-else-if="selectedPlayer" class="player-detail-page">
+        <article class="player-profile-panel"><div class="profile-portrait"><span>{{ selectedPlayer.gameName.slice(0, 1).toUpperCase() }}</span><img v-if="selectedPlayer.profileIconId !== undefined" :src="profileIconUrl(selectedPlayer.profileIconId)" :alt="`${selectedPlayer.gameName} 的召唤师头像`" @error="hideBrokenImage"><b v-if="selectedPlayer.summonerLevel !== undefined">{{ selectedPlayer.summonerLevel }}</b></div><div class="profile-copy"><span>{{ serverName(selectedPlayer.serverId) }} · 监视玩家</span><h2>{{ selectedPlayer.gameName }}<small>#{{ selectedPlayer.tagLine }}</small></h2><p>{{ statusMeta(selectedPlayer).description }}</p></div><n-tag :type="statusMeta(selectedPlayer).type"><span class="status-dot" :class="statusMeta(selectedPlayer).key"></span>{{ statusMeta(selectedPlayer).label }}</n-tag></article>
+        <div class="subtabs" role="tablist" aria-label="玩家详情"><button type="button" role="tab" :aria-selected="playerSection === 'matches'" :class="{ active: playerSection === 'matches' }" @click="playerSection = 'matches'">对局记录</button><button type="button" role="tab" :aria-selected="playerSection === 'policy'" :class="{ active: playerSection === 'policy' }" @click="playerSection = 'policy'">监视设置</button></div>
+        <template v-if="playerSection === 'matches'"><n-alert v-if="runtime(selectedPlayer.id).lastError" type="warning" :show-icon="false" class="restriction-note">{{ errorSummary(runtime(selectedPlayer.id).lastError) }}<details><summary>查看技术详情</summary><p>{{ runtime(selectedPlayer.id).lastError }}</p></details></n-alert><div v-if="!runtime(selectedPlayer.id).recentMatches.length" class="panel empty-state tall">暂无历史数据。点击“刷新战绩”立即查询。</div><div v-else class="history-list"><article v-for="match in runtime(selectedPlayer.id).recentMatches" :key="match.gameId" class="match-row" :class="{ win: match.win === true, loss: match.win === false }"><div class="result-mark"><strong>{{ match.win === true ? '胜利' : match.win === false ? '失败' : '对局' }}</strong><span>{{ relativeTime(match.startedAt) }}</span></div><div class="champion-portrait"><span>{{ (match.championName || '?').slice(0, 1) }}</span><img v-if="match.championId" :src="championIconUrl(match.championId)" :alt="match.championName ? `${match.championName} 英雄头像` : '未知英雄头像'" @error="hideBrokenImage"></div><div class="match-main"><strong>{{ match.championName || '未知英雄' }}</strong><span>{{ queueDisplayName(match.queueId) }} · {{ gameModeName(match.gameMode) }}</span></div><div class="match-kda" v-if="match.kills !== undefined"><strong>{{ match.kills }} / {{ match.deaths ?? 0 }} / {{ match.assists ?? 0 }}</strong><span>K / D / A</span></div><div class="match-meta"><strong>{{ formatDuration(match.durationSeconds) }}</strong><span>#{{ match.gameId }}</span></div></article></div></template>
+        <article v-else class="panel player-policy-panel"><div class="section-heading"><div><h2>玩家监视策略</h2><p>{{ playerPolicyDraft?.overridePolicy ? '此玩家使用独立周期和队列规则' : '此玩家继承全局监视规则' }}</p></div><n-switch :value="playerPolicyDraft?.overridePolicy !== null" aria-label="覆盖全局设置" @update:value="togglePlayerOverride" /></div><template v-if="playerPolicyDraft?.overridePolicy"><div class="form-grid"><n-form-item label="基础周期（分钟）"><n-input-number :value="playerPolicyDraft.overridePolicy.intervalMs / 60000" :min="1" :max="1440" @update:value="setPlayerInterval" /></n-form-item><n-form-item label="最大随机延迟（秒）"><n-input-number :value="playerPolicyDraft.overridePolicy.jitterMs / 1000" :min="0" :max="86400" @update:value="setPlayerJitter" /></n-form-item></div><QueueFilterEditor title="进行中游戏" :filter="playerPolicyDraft.overridePolicy.ongoing" :options="queueOptions" /><QueueFilterEditor title="历史记录" :filter="playerPolicyDraft.overridePolicy.history" :options="queueOptions" /></template><div v-else class="policy-summary">{{ globalPolicySummary }}</div><div class="section-actions"><n-button type="primary" :loading="store.isPending(`update-player:${selectedPlayer.id}`)" @click="savePlayerPolicy">保存玩家设置</n-button></div><details class="details-block"><summary>高级详情 <ChevronDown20Regular /></summary><div class="detail-list"><span>PUUID<strong>{{ shortPuuid(selectedPlayer.puuid) }}</strong></span><span>服务器<strong>{{ selectedPlayer.serverId }}</strong></span></div></details></article>
       </section>
 
-      <section v-else-if="page === 'events'" class="settings-stack">
-        <div class="panel form-panel">
-          <div class="panel-title"><div><h2>Webhook 推送</h2><p>默认适配 Server酱，也可切换为通用 JSON POST</p></div><n-switch v-model:value="config.webhook.enabled" /></div>
-          <n-form-item label="服务类型"><n-select v-model:value="config.webhook.provider" :options="webhookProviderOptions" /></n-form-item>
-          <template v-if="config.webhook.provider === 'serverchan'">
-            <n-alert type="info" :show-icon="false" class="provider-note">使用 Server酱 Turbo：事件将以 title + Markdown desp 推送。<a href="https://sct.ftqq.com/sendkey/" target="_blank" rel="noreferrer">获取 SendKey</a></n-alert>
-            <n-form-item label="SendKey"><n-input v-model:value="config.webhook.sendKey" type="password" show-password-on="click" :placeholder="config.webhook.sendKeyConfigured ? '已通过 Windows 安全存储保存；留空保持不变' : 'SCT 开头的 SendKey'" /></n-form-item>
-            <p v-if="config.webhook.sendKeyConfigured && !config.webhook.sendKey" class="secret-status">✓ SendKey 已通过 Windows 安全存储加密保存</p>
-          </template>
-          <template v-else>
-            <n-form-item label="Webhook URL"><n-input v-model:value="config.webhook.url" placeholder="https://example.com/webhook" /></n-form-item>
-            <div class="header-list"><div v-for="header in config.webhook.headers" :key="header.id" class="header-row"><n-input v-model:value="header.name" placeholder="Header 名称" /><n-input v-model:value="header.value" :type="header.secret ? 'password' : 'text'" :placeholder="header.configured && header.secret ? '已安全保存；留空保持不变' : '值'" /><n-checkbox v-model:checked="header.secret">敏感</n-checkbox><n-button quaternary type="error" @click="removeHeader(header.id)">删除</n-button></div></div>
-            <n-button size="small" dashed @click="addHeader">添加请求头</n-button>
-          </template>
+      <section v-else class="settings-page">
+        <div class="settings-tabs" role="tablist" aria-label="设置分类"><button v-for="section in settingsSections" :key="section.key" type="button" role="tab" :aria-selected="settingsSection === section.key" :class="{ active: settingsSection === section.key }" @click="switchSettingsSection(section.key)"><component :is="section.icon" />{{ section.label }}</button></div>
+        <div v-if="settingsSection === 'monitoring'" class="settings-content"><SettingsSectionCard title="查询周期" description="每次执行完成后，按基础周期加正向随机延迟安排下一次查询"><div class="form-grid"><n-form-item label="基础周期（分钟）"><n-input-number :value="config.globalPolicy.intervalMs / 60000" :min="1" :max="1440" @update:value="setGlobalInterval" /></n-form-item><n-form-item label="最大随机延迟（秒）"><n-input-number :value="config.globalPolicy.jitterMs / 1000" :min="0" :max="86400" @update:value="setGlobalJitter" /></n-form-item></div><div class="policy-summary"><Pulse20Regular />{{ globalPolicySummary }}</div></SettingsSectionCard><SettingsSectionCard title="进行中游戏" description="Spectator 仅返回可观战玩家，随后由 SGP 获取详情"><QueueFilterEditor title="实时队列" :filter="config.globalPolicy.ongoing" :options="queueOptions" /></SettingsSectionCard><SettingsSectionCard title="历史记录" description="首次查询建立基线，之后只通知新增记录"><QueueFilterEditor title="历史队列" :filter="config.globalPolicy.history" :options="queueOptions" /></SettingsSectionCard></div>
+        <div v-else-if="settingsSection === 'events'" class="settings-content"><SettingsSectionCard title="Webhook" description="默认适配 Server酱，也支持通用 JSON POST"><div class="setting-row"><div><strong>启用 Webhook</strong><small>将已启用的事件发送到远程服务</small></div><n-switch v-model:value="config.webhook.enabled" aria-label="启用 Webhook" /></div><div class="setting-row"><div><strong>服务类型</strong><small>{{ config.webhook.provider === 'serverchan' ? 'Server酱 Turbo' : '通用 JSON Webhook' }}</small></div><n-select v-model:value="config.webhook.provider" :options="webhookProviderOptions" class="short-control" /></div></SettingsSectionCard>
+          <details v-for="(type, index) in eventTypes" :key="type" class="panel event-config" :open="index === 0"><summary><span><strong>{{ eventTypeName(type) }}</strong><small>{{ type === 'ongoing_game_detected' ? '首次检测到符合条件的进行中游戏时触发' : '历史基线建立后发现新对局时触发' }}</small></span><ChevronDown20Regular /></summary><div class="event-config-body"><div class="channel-grid"><label><n-checkbox v-model:checked="config.events[type].webhookEnabled" />Webhook</label><label><n-checkbox v-model:checked="config.events[type].notificationEnabled" />Windows 通知</label></div><div class="form-grid"><n-form-item label="通知标题"><n-input v-model:value="config.events[type].notificationTitle" placeholder="通知标题模板" /></n-form-item><n-form-item label="通知正文"><n-input v-model:value="config.events[type].notificationBody" placeholder="通知正文模板" /></n-form-item></div><n-button :disabled="configDirty" :loading="store.isPending(`test-event:${type}:all`)" @click="test(type, 'all')">测试此事件</n-button><span v-if="configDirty" class="inline-hint">请先保存更改再测试</span></div></details>
+          <details class="panel advanced-settings"><summary><span><strong>高级设置</strong><small>SendKey、请求头、JSON 模板和可用变量</small></span><ChevronDown20Regular /></summary><div class="advanced-body"><template v-if="config.webhook.provider === 'serverchan'"><n-form-item label="Server酱 SendKey"><n-input v-model:value="config.webhook.sendKey" type="password" show-password-on="click" :placeholder="config.webhook.sendKeyConfigured ? '已安全保存；留空保持不变' : 'SCT 开头的 SendKey'" /></n-form-item><p class="secret-status">{{ config.webhook.sendKeyConfigured && !config.webhook.sendKey ? 'SendKey 已通过 Windows 安全存储加密保存' : '获取地址：sct.ftqq.com/sendkey' }}</p></template><template v-else><n-form-item label="Webhook URL"><n-input v-model:value="config.webhook.url" placeholder="https://example.com/webhook" /></n-form-item><div class="header-list"><div v-for="header in config.webhook.headers" :key="header.id" class="header-row"><n-input v-model:value="header.name" placeholder="请求头名称" /><n-input v-model:value="header.value" :type="header.secret ? 'password' : 'text'" placeholder="值" /><n-checkbox v-model:checked="header.secret">敏感</n-checkbox><n-button quaternary type="error" @click="removeHeader(header.id)">删除</n-button></div></div><n-button dashed size="small" @click="addHeader">添加请求头</n-button></template><div v-for="type in eventTypes" :key="`template-${type}`" class="template-editor"><n-form-item :label="`${eventTypeName(type)} JSON 模板`"><n-input v-model:value="config.events[type].webhookTemplate" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" /></n-form-item></div><p class="template-help">变量：eventJson、eventType、playerRiotId、playerPuuid、serverId、gameId、queueId、gameMode、occurredAt</p></div></details>
         </div>
-        <div v-for="type in eventTypes" :key="type" class="panel form-panel">
-          <div class="panel-title"><div><h2>{{ type === 'ongoing_game_detected' ? '进行中游戏事件' : '新增历史对局事件' }}</h2><p>{{ type }}</p></div><n-button size="small" @click="test(type, 'all')">测试全部通道</n-button></div>
-          <div class="form-row switches"><n-checkbox v-model:checked="config.events[type].webhookEnabled">发送 Webhook</n-checkbox><n-checkbox v-model:checked="config.events[type].notificationEnabled">Windows 应用通知</n-checkbox></div>
-          <n-form-item :label="config.webhook.provider === 'serverchan' ? 'Server酱消息模板（JSON）' : 'Webhook JSON 模板'"><n-input v-model:value="config.events[type].webhookTemplate" type="textarea" :autosize="{ minRows: 3, maxRows: 10 }" /></n-form-item>
-          <div class="form-row"><n-form-item label="通知标题"><n-input v-model:value="config.events[type].notificationTitle" /></n-form-item><n-form-item label="通知正文"><n-input v-model:value="config.events[type].notificationBody" /></n-form-item></div>
-          <p class="template-help">变量：eventJson、eventType、playerRiotId、playerPuuid、serverId、gameId、queueId、gameMode、occurredAt</p>
-        </div>
-        <div class="save-row"><n-button type="primary" :loading="store.loading" @click="save">保存事件设置</n-button></div>
-      </section>
-
-      <section v-else class="settings-stack">
-        <div class="panel form-panel">
-          <div class="panel-title"><div><h2>活动客户端</h2><p>检测到多个 League Client 时选择监视所使用的连接</p></div></div>
-          <n-select :value="config.selectedConnectionPid" clearable :options="connectionOptions" placeholder="自动选择第一个健康连接" @update:value="selectConnection" />
-        </div>
-        <div class="panel form-panel">
-          <div class="panel-title"><div><h2>关闭窗口行为</h2><p>“每次询问”会在下次关闭窗口时再次保存选择</p></div></div>
-          <n-radio-group v-model:value="config.closeBehavior"><n-space><n-radio value="ask">每次询问</n-radio><n-radio value="tray">最小化到托盘</n-radio><n-radio value="quit">直接退出</n-radio></n-space></n-radio-group>
-          <div class="save-row left"><n-button type="primary" @click="save">保存应用设置</n-button></div>
-        </div>
-        <div class="panel form-panel">
-          <div class="panel-title"><div><h2>诊断信息</h2><p>版本 {{ store.snapshot.appVersion }} · 原生模块 {{ store.snapshot.nativeAvailable ? '可用' : '不可用 / CIM 回退' }}</p></div></div>
-          <pre class="diagnostics">{{ store.snapshot.runtime.diagnostics.length ? store.snapshot.runtime.diagnostics.join('\n') : '暂无错误。LCU 令牌会自动从诊断信息中脱敏。' }}</pre>
-        </div>
+        <div v-else class="settings-content"><SettingsSectionCard title="客户端" description="检测到多个 League Client 时选择监视所使用的连接"><div class="setting-row"><div><strong>活动客户端</strong><small>{{ store.activeConnection ? `${store.activeConnection.serverId} · PID ${store.activeConnection.pid}` : '自动选择第一个健康连接' }}</small></div><n-select v-model:value="config.selectedConnectionPid" clearable :options="connectionOptions" class="wide-control" placeholder="自动选择" /></div></SettingsSectionCard><SettingsSectionCard title="窗口" description="控制关闭主窗口时应用如何继续运行"><div class="setting-row"><div><strong>关闭行为</strong><small>可随时返回此处修改</small></div><n-select v-model:value="config.closeBehavior" :options="closeBehaviorOptions" class="short-control" /></div></SettingsSectionCard><SettingsSectionCard title="应用状态" description="版本和本地原生模块状态"><div class="status-tags"><n-tag>版本 {{ store.snapshot.appVersion }}</n-tag><n-tag :type="store.snapshot.nativeAvailable ? 'success' : 'warning'">原生模块 {{ store.snapshot.nativeAvailable ? '可用' : 'CIM 回退' }}</n-tag></div><details class="details-block diagnostics-block"><summary>诊断信息 <ChevronDown20Regular /></summary><pre>{{ store.snapshot.runtime.diagnostics.length ? store.snapshot.runtime.diagnostics.join('\n') : '暂无错误。敏感令牌会自动脱敏。' }}</pre></details></SettingsSectionCard></div>
+        <div v-if="configDirty" class="sticky-save" role="status"><span><i></i>有未保存的更改</span><div><n-button @click="discardChanges">放弃更改</n-button><n-button type="primary" :loading="store.isPending('save-config')" @click="save">保存更改</n-button></div></div>
       </section>
     </main>
 
-    <n-modal v-model:show="showAdd" preset="card" title="添加监视玩家" class="modal-card">
-      <n-form label-placement="top">
-        <n-form-item label="Riot ID">
-          <n-input v-model:value="riotIdInput" placeholder="游戏名#标签" @keyup.enter="addPlayer" />
-          <template #feedback>名称和标签使用 # 分隔，可直接从客户端或战绩网站复制。</template>
-        </n-form-item>
-        <n-alert type="info" :show-icon="false">服务器将自动使用当前活动的 LCU / SGP 连接。</n-alert>
-        <n-collapse><n-collapse-item title="高级：直接填写 PUUID"><n-input v-model:value="draft.puuid" placeholder="填写后跳过 Riot ID 解析，并使用当前连接服务器" /></n-collapse-item></n-collapse>
-      </n-form>
-      <template #footer><div class="modal-actions"><n-button @click="showAdd = false">取消</n-button><n-button type="primary" :loading="store.loading" @click="addPlayer">解析并添加</n-button></div></template>
-    </n-modal>
-
-    <n-modal v-model:show="showPolicy" preset="card" title="玩家单独策略" class="modal-card" v-if="editingPlayer">
-      <n-checkbox :checked="editingPlayer.overridePolicy !== null" @update:checked="toggleOverride">覆盖全局设置</n-checkbox>
-      <div v-if="editingPlayer.overridePolicy" class="override-form">
-        <div class="form-row"><n-form-item label="周期（分钟）"><n-input-number :value="editingPlayer.overridePolicy.intervalMs / 60000" :min="1" :max="1440" @update:value="setOverrideInterval" /></n-form-item><n-form-item label="随机延迟（秒）"><n-input-number :value="editingPlayer.overridePolicy.jitterMs / 1000" :min="0" :max="86400" @update:value="setOverrideJitter" /></n-form-item></div>
-        <n-form-item label="进行中队列"><n-select v-model:value="editingPlayer.overridePolicy.ongoing.queueIds" multiple filterable tag :options="queueOptions" placeholder="空列表配合“全部”模式" /></n-form-item>
-        <n-radio-group v-model:value="editingPlayer.overridePolicy.ongoing.mode"><n-radio value="all">全部</n-radio><n-radio value="include">仅所选</n-radio></n-radio-group>
-        <n-form-item label="历史队列"><n-select v-model:value="editingPlayer.overridePolicy.history.queueIds" multiple filterable tag :options="queueOptions" /></n-form-item>
-        <n-radio-group v-model:value="editingPlayer.overridePolicy.history.mode"><n-radio value="all">全部</n-radio><n-radio value="include">仅所选</n-radio></n-radio-group>
-      </div>
-      <template #footer><div class="modal-actions"><n-button @click="showPolicy = false">取消</n-button><n-button type="primary" @click="savePlayerPolicy">保存</n-button></div></template>
-    </n-modal>
+    <n-modal v-model:show="showAdd" preset="card" title="添加监视玩家" class="modal-card" :mask-closable="false"><n-form label-placement="top"><n-form-item label="Riot ID"><n-input ref="riotIdInputRef" v-model:value="riotIdInput" placeholder="游戏名#标签" @keyup.enter="addPlayer" /><template #feedback>名称和标签使用 # 分隔；服务器自动使用当前 LCU / SGP 连接。</template></n-form-item><details class="details-block"><summary>高级：直接填写 PUUID <ChevronDown20Regular /></summary><n-input v-model:value="draft.puuid" placeholder="填写后跳过 Riot ID 解析" /></details></n-form><template #footer><div class="modal-actions"><n-button @click="showAdd = false">取消</n-button><n-button type="primary" :loading="store.isPending('add-player')" @click="addPlayer">解析并添加</n-button></div></template></n-modal>
+    <n-modal v-model:show="showRemoveConfirm" preset="card" title="移除监视玩家" class="confirm-modal" :mask-closable="false"><p>移除后将停止监视 {{ pendingRemovePlayer?.gameName }}#{{ pendingRemovePlayer?.tagLine }}。已有本地事件不会被删除。</p><template #footer><div class="modal-actions"><n-button @click="showRemoveConfirm = false">取消</n-button><n-button type="error" :loading="pendingRemovePlayer ? store.isPending(`remove-player:${pendingRemovePlayer.id}`) : false" @click="confirmRemovePlayer">确认移除</n-button></div></template></n-modal>
+    <n-modal v-model:show="showLeaveConfirm" preset="card" title="设置尚未保存" class="confirm-modal" :mask-closable="false"><p>保存更改后再离开，或放弃本次修改。</p><template #footer><div class="modal-actions three"><n-button @click="showLeaveConfirm = false">继续编辑</n-button><n-button @click="discardAndLeave">放弃并离开</n-button><n-button type="primary" :loading="store.isPending('save-config')" @click="saveAndLeave">保存并离开</n-button></div></template></n-modal>
   </div>
-  <div v-else class="loading-screen"><div class="brand-mark large">L</div><p>正在启动 LCU Watchdog…</p></div>
+  <div v-else class="loading-screen"><img class="brand-mark large" :src="appIconUrl" alt=""><p>正在启动 LCU Watchdog…</p></div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useMessage } from 'naive-ui'
-import Dismiss20Regular from '@vicons/fluent/es/Dismiss20Regular'
-import Maximize20Regular from '@vicons/fluent/es/Maximize20Regular'
-import SquareMultiple20Regular from '@vicons/fluent/es/SquareMultiple20Regular'
-import Subtract20Regular from '@vicons/fluent/es/Subtract20Regular'
-import { DEFAULT_POLICY, QUEUE_PRESETS, newPlayerRuntime } from '@shared/defaults'
-import { parseRiotId } from '@shared/riot-id'
-import { LEAGUE_SERVERS } from '@shared/servers'
-import type { AppConfig, PlayerDraft, PlayerTarget, WatchEventType } from '@shared/types'
-import { useWatchdogStore } from '../store'
+import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { NRadio, NRadioGroup, NSelect, useMessage } from 'naive-ui'
+import Add20Regular from '@vicons/fluent/es/Add20Regular'; import Alert20Regular from '@vicons/fluent/es/Alert20Regular'; import Apps20Regular from '@vicons/fluent/es/Apps20Regular'; import ArrowClockwise20Regular from '@vicons/fluent/es/ArrowClockwise20Regular'; import ChevronDown20Regular from '@vicons/fluent/es/ChevronDown20Regular'; import ChevronRight20Regular from '@vicons/fluent/es/ChevronRight20Regular'; import Delete20Regular from '@vicons/fluent/es/Delete20Regular'; import Dismiss20Regular from '@vicons/fluent/es/Dismiss20Regular'; import Edit20Regular from '@vicons/fluent/es/Edit20Regular'; import History20Regular from '@vicons/fluent/es/History20Regular'; import Home20Regular from '@vicons/fluent/es/Home20Regular'; import Maximize20Regular from '@vicons/fluent/es/Maximize20Regular'; import MoreHorizontal20Regular from '@vicons/fluent/es/MoreHorizontal20Regular'; import People20Regular from '@vicons/fluent/es/People20Regular'; import Person20Regular from '@vicons/fluent/es/Person20Regular'; import Play20Regular from '@vicons/fluent/es/Play20Regular'; import Pulse20Regular from '@vicons/fluent/es/Pulse20Regular'; import Settings20Regular from '@vicons/fluent/es/Settings20Regular'; import SquareMultiple20Regular from '@vicons/fluent/es/SquareMultiple20Regular'; import Subtract20Regular from '@vicons/fluent/es/Subtract20Regular'; import Warning20Regular from '@vicons/fluent/es/Warning20Regular'
+import appIconUrl from '@app-assets/icon.png'
+import { DEFAULT_POLICY, QUEUE_PRESETS, newPlayerRuntime } from '@shared/defaults'; import { parseRiotId } from '@shared/riot-id'; import { LEAGUE_SERVERS } from '@shared/servers'; import type { AppConfig, MonitorPolicy, PlayerDraft, PlayerTarget, QueueFilter, WatchEventType } from '@shared/types'
+import { useWatchdogStore } from '../store'; import { closePlayerTab, eventSourceDisplayName, openPlayerTab, playerUiStatus, queueDisplayName, recoverableErrorSummary, type PlayerTabState, type PrimaryPage, type SettingsSection } from '../ui-adapters'
 
-const store = useWatchdogStore()
-const message = useMessage()
-const page = ref('overview')
-const config = ref<AppConfig | null>(null)
-const configDirty = ref(false)
-const showAdd = ref(false)
-const showPolicy = ref(false)
-const editingPlayer = ref<PlayerTarget | null>(null)
-const selectedPlayerId = ref<string | null>(null)
-const windowMaximized = ref(false)
-const draft = ref<PlayerDraft>({ gameName: '', tagLine: '', serverId: 'JP', puuid: '' })
-const riotIdInput = ref('')
-const eventTypes: WatchEventType[] = ['ongoing_game_detected', 'new_match_detected']
-const pages = [
-  { key: 'overview', icon: '⌂', label: '总览', description: '连接状态、调度进度与最近事件' },
-  { key: 'players', icon: '◎', label: '玩家', description: '配置需要周期监视的玩家信息' },
-  { key: 'schedule', icon: '◷', label: '周期与模式', description: '控制查询周期、随机延迟与队列过滤' },
-  { key: 'events', icon: '◇', label: '事件', description: '配置 Webhook 与 Windows 应用通知' },
-  { key: 'settings', icon: '⚙', label: '应用设置', description: '活动客户端、关闭行为与诊断信息' }
-]
-const currentPage = computed(() => pages.find((item) => item.key === page.value) ?? pages[0]!)
-const enabledPlayers = computed(() => config.value?.players.filter((player) => player.enabled).length ?? 0)
-const selectedPlayer = computed(() => config.value?.players.find((player) => player.id === selectedPlayerId.value) ?? null)
-const queueOptions = QUEUE_PRESETS.map((queue) => ({ label: `${queue.label} (${queue.value})`, value: queue.value }))
-const webhookProviderOptions = [{ label: 'Server酱（推荐）', value: 'serverchan' }, { label: '通用 JSON Webhook', value: 'generic' }]
-const connectionOptions = computed(() => store.snapshot?.connections.map((item) => ({ label: `${item.serverId} · PID ${item.pid}`, value: item.pid })) ?? [])
+const SettingsSectionCard = defineComponent({ props: { title: { type: String, required: true }, description: { type: String, required: true } }, setup(props, { slots }) { return () => h('article', { class: 'panel settings-card' }, [h('div', { class: 'section-heading' }, h('div', [h('h2', props.title), h('p', props.description)])), slots.default?.()]) } })
+function updateFilterMode(filter: QueueFilter, value: 'all' | 'include') { filter.mode = value }
+function updateFilterQueues(filter: QueueFilter, value: number[]) { filter.queueIds = value }
+const QueueFilterEditor = defineComponent({ props: { title: { type: String, required: true }, filter: { type: Object as () => QueueFilter, required: true }, options: { type: Array as () => { label: string; value: number }[], required: true } }, setup(props) { return () => h('div', { class: 'queue-editor' }, [h('div', { class: 'queue-editor-head' }, [h('strong', props.title), h(NRadioGroup, { value: props.filter.mode, 'onUpdate:value': (value: 'all' | 'include') => updateFilterMode(props.filter, value) }, () => [h(NRadio, { value: 'all' }, () => '所有模式'), h(NRadio, { value: 'include' }, () => '仅所选队列')])]), props.filter.mode === 'include' ? h(NSelect, { value: props.filter.queueIds, 'onUpdate:value': (value: number[]) => updateFilterQueues(props.filter, value), multiple: true, filterable: true, tag: true, options: props.options, placeholder: '选择或输入队列 ID' }) : null]) } })
 
+const store = useWatchdogStore(); const message = useMessage(); const contentRef = ref<HTMLElement | null>(null); const primaryPage = ref<PrimaryPage>('overview'); const settingsSection = ref<SettingsSection>('monitoring'); const playerSection = ref<'matches' | 'policy'>('matches'); const tabState = ref<PlayerTabState>({ openIds: [], recentIds: [], activeId: null }); const config = ref<AppConfig | null>(null); const configDirty = ref(false); const showAdd = ref(false); const showRemoveConfirm = ref(false); const showLeaveConfirm = ref(false); const pendingRemovePlayer = ref<PlayerTarget | null>(null); const playerPolicyDraft = ref<PlayerTarget | null>(null); const windowMaximized = ref(false); const draft = ref<PlayerDraft>({ gameName: '', tagLine: '', serverId: 'JP', puuid: '' }); const riotIdInput = ref(''); const riotIdInputRef = ref<{ focus(): void } | null>(null); let pendingNavigation: (() => void) | null = null; let syncingConfig = false
+const primaryPages = [{ key: 'overview' as const, label: '总览', description: '监视健康度、调度进度与最近事件', icon: Home20Regular }, { key: 'players' as const, label: '玩家', description: '浏览和管理需要周期监视的玩家', icon: People20Regular }, { key: 'settings' as const, label: '设置', description: '监视规则、事件通知与应用行为', icon: Settings20Regular }]
+const settingsSections = [{ key: 'monitoring' as const, label: '监视规则', icon: Pulse20Regular }, { key: 'events' as const, label: '事件通知', icon: Alert20Regular }, { key: 'application' as const, label: '应用', icon: Apps20Regular }]
+const eventTypes: WatchEventType[] = ['ongoing_game_detected', 'new_match_detected']; const playerMenuOptions = [{ label: '监视设置', key: 'policy', icon: () => h(Edit20Regular) }, { label: '移除玩家', key: 'remove', icon: () => h(Delete20Regular) }]; const webhookProviderOptions = [{ label: 'Server酱（推荐）', value: 'serverchan' }, { label: '通用 JSON Webhook', value: 'generic' }]; const closeBehaviorOptions = [{ label: '每次询问', value: 'ask' }, { label: '最小化到托盘', value: 'tray' }, { label: '直接退出', value: 'quit' }]; const queueOptions = QUEUE_PRESETS.map((q) => ({ label: `${q.label} (${q.value})`, value: q.value }))
+const currentPage = computed(() => primaryPages.find((x) => x.key === primaryPage.value) ?? primaryPages[0]!); const selectedPlayer = computed(() => config.value?.players.find((p) => p.id === tabState.value.activeId) ?? null); const openPlayers = computed(() => tabState.value.openIds.map((id) => config.value?.players.find((p) => p.id === id)).filter((p): p is PlayerTarget => Boolean(p))); const enabledPlayers = computed(() => config.value?.players.filter((p) => p.enabled).length ?? 0); const restrictedPlayers = computed(() => config.value?.players.filter((p) => p.enabled && Boolean(runtime(p.id).lastError)) ?? []); const runningPlayers = computed(() => config.value?.players.filter((p) => runtime(p.id).running).length ?? 0); const connectionOptions = computed(() => store.snapshot?.connections.map((x) => ({ label: `${x.serverId} · PID ${x.pid}`, value: x.pid })) ?? []); const pageHeading = computed(() => selectedPlayer.value ? { title: `${selectedPlayer.value.gameName}#${selectedPlayer.value.tagLine}`, description: '对局记录与此玩家的监视策略' } : { title: currentPage.value.label, description: currentPage.value.description }); const latestRunLabel = computed(() => compactTime(latestTimestamp(config.value?.players.map((p) => runtime(p.id).lastRunAt) ?? []))); const nextRunLabel = computed(() => compactTime(earliestTimestamp(config.value?.players.filter((p) => p.enabled).map((p) => runtime(p.id).nextRunAt) ?? []))); const globalPolicySummary = computed(() => policySummary(config.value?.globalPolicy ?? DEFAULT_POLICY))
 const cloneJson = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
-
-let syncingConfig = false
-function replaceLocalConfig(value: AppConfig) {
-  syncingConfig = true
-  config.value = cloneJson(value)
-  configDirty.value = false
-  void nextTick(() => { syncingConfig = false })
-}
-watch(() => store.snapshot?.config, (value) => {
-  if (value && (!config.value || !configDirty.value)) replaceLocalConfig(value)
-}, { deep: true, immediate: true })
-watch(config, () => { if (!syncingConfig) configDirty.value = true }, { deep: true })
-
-let removeNavigation: (() => void) | null = null
-let removeWindowMaximized: (() => void) | null = null
-onMounted(async () => {
-  await store.init()
-  removeNavigation = window.watchdog.onNavigatePlayer((playerId) => { page.value = 'players'; selectedPlayerId.value = playerId })
-  removeWindowMaximized = window.watchdog.onWindowMaximized((maximized) => { windowMaximized.value = maximized })
-})
-onBeforeUnmount(() => { removeNavigation?.(); removeWindowMaximized?.() })
-
-function runtime(id: string) { return store.snapshot?.runtime.players[id] ?? newPlayerRuntime() }
-function serverName(id: string) { return LEAGUE_SERVERS.find((server) => server.id === id)?.name ?? id }
-function shortPuuid(value: string) { return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value }
-function formatTime(value: string | null | undefined) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '未计划' }
-function formatDuration(value: number | undefined) {
-  if (!value || value < 0) return '时长未知'
-  return `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, '0')}`
-}
-function queueName(queueId: number) { return QUEUE_PRESETS.find((queue) => queue.value === queueId)?.label ?? `队列 ${queueId}` }
-function profileIconUrl(iconId: number) { return `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/profile-icons/${iconId}.jpg` }
-function championIconUrl(championId: number) { return `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/${championId}.png` }
-function hideBrokenImage(event: unknown) {
-  const image = (event as { currentTarget?: { style: { display: string } } }).currentTarget
-  if (image) image.style.display = 'none'
-}
-
-async function guard(task: () => Promise<unknown>, success?: string) {
-  try { await task(); if (success) message.success(success) }
-  catch (error) { message.error(error instanceof Error ? error.message : String(error)) }
-}
-async function save(): Promise<boolean> {
-  if (!config.value) return false
-  try {
-    await store.saveConfig(cloneJson(config.value))
-    if (store.snapshot?.config) replaceLocalConfig(store.snapshot.config)
-    message.success('设置已保存')
-    return true
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : String(error))
-    return false
-  }
-}
-async function runAll() { await guard(() => store.runNow(), '查询已完成') }
-async function runPlayer(id: string) { await guard(() => store.runNow(id), '查询已完成') }
-async function selectConnection(pid: number | null) { if (config.value) config.value.selectedConnectionPid = pid; await guard(() => store.selectConnection(pid), '活动客户端已更新') }
-function openAddPlayer() {
-  draft.value = { gameName: '', tagLine: '', serverId: store.activeConnection?.serverId ?? 'JP', puuid: '' }
-  riotIdInput.value = ''
-  showAdd.value = true
-}
-async function addPlayer() {
-  await guard(async () => {
-    const parsed = parseRiotId(riotIdInput.value)
-    if (!draft.value.puuid?.trim() && !parsed) throw new Error('请输入完整 Riot ID（游戏名#标签）')
-    if (riotIdInput.value.trim() && !parsed) throw new Error('Riot ID 格式不正确，名称和标签之间需要一个 #')
-    draft.value.gameName = parsed?.gameName ?? ''
-    draft.value.tagLine = parsed?.tagLine ?? ''
-    await store.addPlayer(cloneJson(draft.value))
-    showAdd.value = false
-  }, '玩家已添加')
-}
-async function removePlayer(id: string) { await guard(() => store.removePlayer(id), '玩家已移除') }
-async function togglePlayer(player: PlayerTarget, enabled: boolean) { await guard(() => store.updatePlayer({ ...cloneJson(player), enabled }), enabled ? '已开始监视' : '已暂停监视') }
-function editPolicy(player: PlayerTarget) { editingPlayer.value = cloneJson(player); showPolicy.value = true }
-function toggleOverride(enabled: boolean) { if (editingPlayer.value) editingPlayer.value.overridePolicy = enabled ? cloneJson(config.value?.globalPolicy ?? DEFAULT_POLICY) : null }
-function setOverrideInterval(value: number | null) { if (editingPlayer.value?.overridePolicy && value) editingPlayer.value.overridePolicy.intervalMs = value * 60_000 }
-function setOverrideJitter(value: number | null) { if (editingPlayer.value?.overridePolicy && value !== null) editingPlayer.value.overridePolicy.jitterMs = value * 1_000 }
-async function savePlayerPolicy() { if (!editingPlayer.value) return; await guard(async () => { await store.updatePlayer(editingPlayer.value!); showPolicy.value = false }, '玩家策略已保存') }
-function setGlobalInterval(value: number | null) { if (config.value && value) config.value.globalPolicy.intervalMs = value * 60_000 }
-function setGlobalJitter(value: number | null) { if (config.value && value !== null) config.value.globalPolicy.jitterMs = value * 1_000 }
-function addHeader() { config.value?.webhook.headers.push({ id: crypto.randomUUID(), name: '', value: '', secret: true, configured: false }) }
-function removeHeader(id: string) { if (config.value) config.value.webhook.headers = config.value.webhook.headers.filter((header) => header.id !== id) }
-async function test(type: WatchEventType, channel: 'all' | 'webhook' | 'notification') {
-  if (!(await save())) return
-  const result = await store.testEvent({ type, channel })
-  if (result.ok) message.success(result.message); else message.error(result.message)
-}
-async function controlWindow(action: 'minimize' | 'toggle-maximize' | 'close') {
-  windowMaximized.value = await window.watchdog.windowControl(action)
-}
+function replaceLocalConfig(value: AppConfig) { syncingConfig = true; config.value = cloneJson(value); configDirty.value = false; void nextTick(() => { syncingConfig = false }) }
+watch(() => store.snapshot?.config, (value) => { if (value && (!config.value || !configDirty.value)) replaceLocalConfig(value) }, { deep: true, immediate: true }); watch(config, () => { if (!syncingConfig && primaryPage.value === 'settings') configDirty.value = true }, { deep: true }); watch(selectedPlayer, (p) => { playerPolicyDraft.value = p ? cloneJson(p) : null }, { immediate: true }); watch(showAdd, (show) => { if (show) void nextTick(() => riotIdInputRef.value?.focus()) })
+let removeNavigation: (() => void) | null = null; let removeWindowMaximized: (() => void) | null = null
+onMounted(async () => { await store.init(); removeNavigation = window.watchdog.onNavigatePlayer((id) => openPlayer(id)); removeWindowMaximized = window.watchdog.onWindowMaximized((v) => { windowMaximized.value = v }) }); onBeforeUnmount(() => { removeNavigation?.(); removeWindowMaximized?.() })
+function scrollTop() { void nextTick(() => contentRef.value?.scrollTo({ top: 0 })) }; function performNavigation(action: () => void) { if (primaryPage.value === 'settings' && configDirty.value) { pendingNavigation = action; showLeaveConfirm.value = true; return } action() }; function navigate(page: PrimaryPage) { performNavigation(() => { primaryPage.value = page; tabState.value.activeId = null; scrollTop() }) }; function openPlayer(id: string) { performNavigation(() => { primaryPage.value = 'players'; tabState.value = openPlayerTab(tabState.value, id); playerSection.value = 'matches'; scrollTop() }) }; function closePlayer(id: string) { const active = tabState.value.activeId === id; tabState.value = closePlayerTab(tabState.value, id); if (active && !tabState.value.activeId) primaryPage.value = 'players'; scrollTop() }
+function switchSettingsSection(section: SettingsSection) { settingsSection.value = section; scrollTop() }
+function handleTitleTabKey(event: KeyboardEvent) { if (!['ArrowLeft', 'ArrowRight'].includes(event.key) || !openPlayers.value.length) return; event.preventDefault(); const ids = openPlayers.value.map((p) => p.id); const current = tabState.value.activeId ? ids.indexOf(tabState.value.activeId) : -1; const delta = event.key === 'ArrowRight' ? 1 : -1; openPlayer(ids[(current + delta + ids.length) % ids.length]!) }
+async function saveAndLeave() { if (await save()) { showLeaveConfirm.value = false; const action = pendingNavigation; pendingNavigation = null; action?.() } }; function discardAndLeave() { discardChanges(); showLeaveConfirm.value = false; const action = pendingNavigation; pendingNavigation = null; action?.() }; function discardChanges() { if (store.snapshot?.config) replaceLocalConfig(store.snapshot.config) }
+function runtime(id: string) { return store.snapshot?.runtime.players[id] ?? newPlayerRuntime() }; function serverName(id: string) { return LEAGUE_SERVERS.find((s) => s.id === id)?.name ?? id }; function shortPuuid(v: string) { return v.length > 18 ? `${v.slice(0, 8)}…${v.slice(-6)}` : v }; function formatDuration(v?: number) { return !v || v < 0 ? '时长未知' : `${Math.floor(v / 60)}:${String(Math.floor(v % 60)).padStart(2, '0')}` }; function compactTime(v?: string | null) { return v ? new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '未计划' }; function relativeTime(v?: string | null) { if (!v) return '时间未知'; const m = Math.max(0, Math.floor((Date.now() - new Date(v).getTime()) / 60000)); return m < 60 ? `${m} 分钟前` : m < 1440 ? `${Math.floor(m / 60)} 小时前` : `${Math.floor(m / 1440)} 天前` }; function latestTimestamp(v: (string | null)[]) { return v.filter(Boolean).sort().at(-1) ?? null }; function earliestTimestamp(v: (string | null)[]) { return v.filter(Boolean).sort().at(0) ?? null }; function profileIconUrl(id: number) { return `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/profile-icons/${id}.jpg` }; function championIconUrl(id: number) { return `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/${id}.png` }; function hideBrokenImage(e: Event) { (e.currentTarget as HTMLImageElement).style.display = 'none' }; function gameModeName(mode: string) { return ({ CLASSIC: '召唤师峡谷', ARAM: '极地大乱斗', CHERRY: '斗魂竞技场' } as Record<string, string>)[mode] ?? mode ?? '未知模式' }; function eventTypeName(type: WatchEventType) { return type === 'ongoing_game_detected' ? '进行中游戏' : '新增历史对局' }; function errorSummary(error: string | null) { return recoverableErrorSummary(error) }; function policySummary(p: MonitorPolicy) { const min = Math.round(p.intervalMs / 60000), max = Math.round((p.intervalMs + p.jitterMs) / 60000); const history = p.history.mode === 'all' ? '历史监视全部模式' : `历史监视${p.history.queueIds.map(queueDisplayName).join('、') || '未选择队列'}`; return `每 ${min}${max > min ? `–${max}` : ''} 分钟，${history}` }
+function statusMeta(player: PlayerTarget) { const key = playerUiStatus(player, runtime(player.id)); return { running: { key, label: '查询中', type: 'info' as const, description: '正在获取最新实时状态和对局记录' }, restricted: { key, label: '查询受限', type: 'warning' as const, description: errorSummary(runtime(player.id).lastError) ?? '部分数据暂不可用' }, watching: { key, label: '监视中', type: 'success' as const, description: '监视器将按计划查询此玩家' }, paused: { key, label: '已暂停', type: 'default' as const, description: '此玩家当前不会自动查询' }, waiting: { key, label: '等待基线', type: 'info' as const, description: '首次历史查询将建立本地基线' } }[key] }
+async function guard(task: () => Promise<unknown>, success?: string) { try { await task(); if (success) message.success(success) } catch (e) { message.error(e instanceof Error ? e.message : String(e)) } }; async function save() { if (!config.value) return false; try { await store.saveConfig(cloneJson(config.value)); if (store.snapshot?.config) replaceLocalConfig(store.snapshot.config); message.success('设置已保存'); return true } catch (e) { message.error(e instanceof Error ? e.message : String(e)); return false } }; async function runAll() { await guard(() => store.runNow(), '已开始查询') }; async function runPlayer(id: string) { await guard(() => store.runNow(id), '已开始查询') }
+function openAddPlayer() { draft.value = { gameName: '', tagLine: '', serverId: store.activeConnection?.serverId ?? 'JP', puuid: '' }; riotIdInput.value = ''; showAdd.value = true }; async function addPlayer() { await guard(async () => { const parsed = parseRiotId(riotIdInput.value); if (!draft.value.puuid?.trim() && !parsed) throw new Error('请输入完整 Riot ID（游戏名#标签）'); if (riotIdInput.value.trim() && !parsed) throw new Error('Riot ID 格式不正确，名称和标签之间需要一个 #'); draft.value.gameName = parsed?.gameName ?? ''; draft.value.tagLine = parsed?.tagLine ?? ''; await store.addPlayer(cloneJson(draft.value)); if (store.snapshot?.config) replaceLocalConfig(store.snapshot.config); showAdd.value = false }, '玩家已添加') }; async function togglePlayer(p: PlayerTarget, enabled: boolean) { await guard(async () => { await store.updatePlayer({ ...cloneJson(p), enabled }); if (store.snapshot?.config && !configDirty.value) replaceLocalConfig(store.snapshot.config) }, enabled ? '已开始监视' : '已暂停监视') }
+function handlePlayerMenu(p: PlayerTarget, key: string) { if (key === 'policy') { openPlayer(p.id); playerSection.value = 'policy' } else { pendingRemovePlayer.value = p; showRemoveConfirm.value = true } }; async function confirmRemovePlayer() { if (!pendingRemovePlayer.value) return; const id = pendingRemovePlayer.value.id; await guard(async () => { await store.removePlayer(id); tabState.value = closePlayerTab(tabState.value, id); if (store.snapshot?.config) replaceLocalConfig(store.snapshot.config); showRemoveConfirm.value = false; pendingRemovePlayer.value = null }, '玩家已移除') }
+function togglePlayerOverride(v: boolean) { if (playerPolicyDraft.value) playerPolicyDraft.value.overridePolicy = v ? cloneJson(config.value?.globalPolicy ?? DEFAULT_POLICY) : null }; function setPlayerInterval(v: number | null) { if (v && playerPolicyDraft.value?.overridePolicy) playerPolicyDraft.value.overridePolicy.intervalMs = v * 60000 }; function setPlayerJitter(v: number | null) { if (v !== null && playerPolicyDraft.value?.overridePolicy) playerPolicyDraft.value.overridePolicy.jitterMs = v * 1000 }; async function savePlayerPolicy() { if (!playerPolicyDraft.value) return; await guard(async () => { await store.updatePlayer(cloneJson(playerPolicyDraft.value!)); if (store.snapshot?.config) replaceLocalConfig(store.snapshot.config) }, '玩家设置已保存') }; function setGlobalInterval(v: number | null) { if (v && config.value) config.value.globalPolicy.intervalMs = v * 60000 }; function setGlobalJitter(v: number | null) { if (v !== null && config.value) config.value.globalPolicy.jitterMs = v * 1000 }; function addHeader() { config.value?.webhook.headers.push({ id: crypto.randomUUID(), name: '', value: '', secret: true, configured: false }) }; function removeHeader(id: string) { if (config.value) config.value.webhook.headers = config.value.webhook.headers.filter((h) => h.id !== id) }; async function test(type: WatchEventType, channel: 'all' | 'webhook' | 'notification') { if (configDirty.value) return; await guard(async () => { const result = await store.testEvent({ type, channel }); if (!result.ok) throw new Error(result.message); message.success(result.message) }) }; async function controlWindow(action: 'minimize' | 'toggle-maximize' | 'close') { windowMaximized.value = await window.watchdog.windowControl(action) }
 </script>

@@ -3,6 +3,7 @@ import type { AppConfig, TestEventRequest, WatchEvent } from '@shared/types'
 import type { ConfigStore, RuntimeStore } from './persistence'
 import { renderJsonTemplate, renderTextTemplate } from './template'
 import { assertServerChanSuccess, buildServerChanRequest } from './serverchan'
+import { appIconPath } from './icon'
 
 const RETRY_DELAYS = [1_000, 5_000, 15_000]
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -90,6 +91,7 @@ export class EventDispatcher {
     const notification = new Notification({
       title: renderTextTemplate(titleTemplate, event),
       body: renderTextTemplate(bodyTemplate, event),
+      icon: appIconPath(),
       silent: false
     })
     notification.on('click', () => this.onNotificationClick(event.player.id))

@@ -1,20 +1,16 @@
-import { app, BrowserWindow, dialog, Menu, nativeImage, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, Menu, shell, Tray } from 'electron'
 import path from 'node:path'
 import type { AppController } from './controller'
+import { appWindowIconPath, trayIcon } from './icon'
 
 let tray: Tray | null = null
 let quitting = false
-
-function trayImage() {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="8" fill="#5b5bd6"/><path d="M8 7h5v14h11v5H8z" fill="white"/><circle cx="21" cy="11" r="5" fill="#80e1d1"/></svg>`
-  return nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`).resize({ width: 16, height: 16 })
-}
 
 export function createMainWindow(controller: AppController): BrowserWindow {
   Menu.setApplicationMenu(null)
   const window = new BrowserWindow({
     width: 1180, height: 760, minWidth: 980, minHeight: 660, show: false,
-    backgroundColor: '#f5f6fb', title: 'LCU Watchdog', autoHideMenuBar: true,
+    backgroundColor: '#171425', title: 'LCU Watchdog', icon: appWindowIconPath(), autoHideMenuBar: true,
     frame: false,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.cjs'),
@@ -56,7 +52,7 @@ export function createMainWindow(controller: AppController): BrowserWindow {
   if (process.env.ELECTRON_RENDERER_URL) void window.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void window.loadFile(path.join(__dirname, '../renderer/index.html'))
 
-  tray = new Tray(trayImage())
+  tray = new Tray(trayIcon())
   tray.setToolTip('LCU Watchdog')
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开 LCU Watchdog', click: () => { window.show(); window.focus() } },

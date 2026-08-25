@@ -20,6 +20,8 @@
     "vitest.config.ts",
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
+    "src/renderer/src/ui-adapters.ts",
+    "src/renderer/src/ui-theme.ts",
     "src/shared/**/*.ts",
     "tests/**/*.ts"
   ]

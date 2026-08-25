@@ -23,7 +23,8 @@ export default tseslint.config(
       parserOptions: { parser: tseslint.parser },
       globals: {
         window: 'readonly', document: 'readonly', innerWidth: 'readonly', innerHeight: 'readonly',
-        crypto: 'readonly', structuredClone: 'readonly', console: 'readonly', URL: 'readonly'
+        crypto: 'readonly', structuredClone: 'readonly', console: 'readonly', URL: 'readonly',
+        HTMLElement: 'readonly', HTMLImageElement: 'readonly', KeyboardEvent: 'readonly', Event: 'readonly'
       }
     },
     rules: {
@@ -33,6 +34,8 @@ export default tseslint.config(
       'vue/max-attributes-per-line': 'off',
       'vue/singleline-html-element-content-newline': 'off',
       'vue/html-self-closing': 'off',
+      'vue/multiline-html-element-content-newline': 'off',
+      'vue/one-component-per-file': 'off',
       'vue/attributes-order': 'off'
     }
   },

@@ -1,4 +1,5 @@
 import type { WatchEvent } from '@shared/types'
+import { gameModeDisplayName, queueDisplayName } from '@shared/queues'
 
 export function eventVariables(event: WatchEvent): Record<string, unknown> {
   if (event.source === 'test') {
@@ -18,7 +19,9 @@ export function eventVariables(event: WatchEvent): Record<string, unknown> {
       game: {
         gameId: '测试',
         queueId: '测试',
+        queueName: '测试',
         gameMode: '测试',
+        rawGameMode: '测试',
         startedAt: '测试',
         durationSeconds: '测试'
       },
@@ -38,12 +41,16 @@ export function eventVariables(event: WatchEvent): Record<string, unknown> {
       serverId: '测试',
       gameId: '测试',
       queueId: '测试',
+      queueName: '测试',
       gameMode: '测试',
+      rawGameMode: '测试',
       gameStartedAt: '测试',
       eventJson: testEventJson
     }
   }
 
+  const queueName = queueDisplayName(event.game.queueId)
+  const gameMode = gameModeDisplayName(event.game.queueId, event.game.gameMode)
   return {
     schemaVersion: event.schemaVersion,
     eventId: event.eventId,
@@ -57,9 +64,14 @@ export function eventVariables(event: WatchEvent): Record<string, unknown> {
     serverId: event.player.serverId,
     gameId: event.game.gameId,
     queueId: event.game.queueId,
-    gameMode: event.game.gameMode,
+    queueName,
+    gameMode,
+    rawGameMode: event.game.gameMode,
     gameStartedAt: event.game.startedAt ?? '',
-    eventJson: event
+    eventJson: {
+      ...event,
+      game: { ...event.game, queueName, gameMode, rawGameMode: event.game.gameMode }
+    }
   }
 }
 
