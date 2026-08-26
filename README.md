@@ -110,7 +110,7 @@ Webhook 超时为 10 秒。网络错误、HTTP 408、429 和 5xx 会按 1/5/15 �
 
 ## 安装
 
-v1 仅支持 Windows 10/11 x64，并要求应用与 League Client 运行在同一 Windows 用户下。
+仅支持 Windows 10/11 x64，并要求应用与 League Client 运行在同一 Windows 用户下。
 
 使用构建产物：
 
