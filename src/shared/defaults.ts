@@ -44,7 +44,9 @@ export const newPlayerRuntime = (): PlayerRuntimeState => ({
   running: false,
   lastRunAt: null,
   nextRunAt: null,
-  lastError: null
+  lastError: null,
+  presence: 'unknown',
+  presenceUpdatedAt: null
 })
 
 export const DEFAULT_RUNTIME: RuntimeState = {

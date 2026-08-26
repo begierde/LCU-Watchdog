@@ -1,5 +1,5 @@
 import { getServer, regionPath } from '@shared/servers'
-import type { MatchInfo, PlayerDraft, PrivateLcuConnection } from '@shared/types'
+import type { MatchInfo, PlayerDraft, PlayerPresence, PrivateLcuConnection } from '@shared/types'
 import { HttpStatusError, requestLocalJson } from './lcu/http'
 
 interface SessionTokens { pid: number; entitlement: string; leagueSession: string }
@@ -8,9 +8,12 @@ interface SummonerProfile { profileIconId?: number; summonerLevel?: number }
 interface SpectatorAvailability { available: boolean; error?: unknown }
 
 export interface OngoingMatchResult {
-  match: MatchInfo
-  source: 'lcu-chat-presence' | 'lcu-spectator+sgp-gsm' | 'sgp-gsm'
+  match: MatchInfo | null
+  source?: 'lcu-chat-presence' | 'lcu-spectator+sgp-gsm' | 'sgp-gsm'
+  presence: PlayerPresence
 }
+
+export interface FriendPresenceResult { presence: PlayerPresence; match: MatchInfo | null }
 
 export class OngoingQueryUnavailableError extends Error {}
 
@@ -73,22 +76,28 @@ export class GameDataClient {
     return { source: 'sgp-history', matches: normalizeMatches(data, puuid).slice(0, 20) }
   }
 
-  async getOngoing(puuid: string, serverId: string): Promise<OngoingMatchResult | null> {
+  async getOngoing(puuid: string, serverId: string): Promise<OngoingMatchResult> {
     const connection = this.requireConnection()
-    if (serverId !== connection.serverId) return null
+    if (serverId !== connection.serverId) return { match: null, presence: 'unknown' }
 
     let presenceError: unknown
+    let knownPresence: PlayerPresence = 'unknown'
     try {
       const friends = await requestLocalJson<unknown>(connection, '/lol-chat/v1/friends')
-      const presence = normalizeChatPresence(friends, puuid)
-      if (presence) return { match: presence, source: 'lcu-chat-presence' }
+      const friend = normalizeFriendPresence(friends, puuid)
+      if (friend) {
+        knownPresence = friend.presence
+        if (friend.match) return { match: friend.match, source: 'lcu-chat-presence', presence: 'in_game' }
+      }
     } catch (error) { presenceError = error }
 
     const spectator = await this.spectator.isAvailable(puuid)
     if (spectator.available) {
       try {
         const game = await this.getGsmOngoing(serverId, puuid)
-        return game ? { match: game, source: 'lcu-spectator+sgp-gsm' } : null
+        return game
+          ? { match: game, source: 'lcu-spectator+sgp-gsm', presence: 'in_game' }
+          : { match: null, presence: knownPresence }
       } catch (sgpError) {
         throw new OngoingQueryUnavailableError(
           `Spectator 已确认该玩家可查询，但无法取得对局详情：${describeOngoingError(sgpError)}`
@@ -98,9 +107,10 @@ export class GameDataClient {
 
     try {
       const game = await this.getGsmOngoing(serverId, puuid)
-      if (game) return { match: game, source: 'sgp-gsm' }
-      return null
+      if (game) return { match: game, source: 'sgp-gsm', presence: 'in_game' }
+      return { match: null, presence: knownPresence }
     } catch (sgpError) {
+      if (knownPresence !== 'unknown') return { match: null, presence: knownPresence }
       const reasons = [spectator.error, sgpError, presenceError]
         .filter((error) => error !== undefined)
         .map(describeOngoingError)
@@ -231,21 +241,29 @@ class SpectatorBatcher {
 }
 
 export function normalizeChatPresence(input: unknown, puuid: string): MatchInfo | null {
+  return normalizeFriendPresence(input, puuid)?.match ?? null
+}
+
+export function normalizeFriendPresence(input: unknown, puuid: string): FriendPresenceResult | null {
   if (!Array.isArray(input)) return null
   const friend = input.find((item: any) => item?.puuid === puuid) as any
   if (!friend) return null
   const lol = friend.lol ?? {}
   const status = String(lol.gameStatus ?? '').replace(/[-_\s]/g, '').toLowerCase()
-  if (status !== 'ingame') return null
-  const timestamp = Number(lol.timestamp ?? 0)
-  const gameId = String(lol.gameId ?? lol.spectatorId ?? (timestamp > 0 ? `presence-${puuid}-${timestamp}` : ''))
-  if (!gameId) return null
-  return {
-    gameId,
-    queueId: Number(lol.queueId ?? lol.queue ?? 0),
-    gameMode: String(lol.gameMode ?? lol.gameQueueType ?? ''),
-    startedAt: timestamp > 0 ? new Date(timestamp).toISOString() : null
+  if (status === 'ingame') {
+    const timestamp = Number(lol.timestamp ?? 0)
+    const gameId = String(lol.gameId ?? lol.spectatorId ?? (timestamp > 0 ? `presence-${puuid}-${timestamp}` : ''))
+    if (gameId) return { presence: 'in_game', match: {
+      gameId,
+      queueId: Number(lol.queueId ?? lol.queue ?? 0),
+      gameMode: String(lol.gameMode ?? lol.gameQueueType ?? ''),
+      startedAt: timestamp > 0 ? new Date(timestamp).toISOString() : null
+    } }
   }
+  const availability = String(friend.availability ?? friend.status ?? '').toLowerCase()
+  if (availability === 'offline') return { presence: 'offline', match: null }
+  if (['chat', 'away', 'dnd', 'mobile', 'online'].includes(availability)) return { presence: 'online', match: null }
+  return { presence: 'unknown', match: null }
 }
 
 export function normalizeGsmOngoing(input: unknown): MatchInfo | null {

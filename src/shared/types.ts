@@ -1,6 +1,7 @@
 export type WatchEventType = 'ongoing_game_detected' | 'new_match_detected'
 export type CloseBehavior = 'ask' | 'tray' | 'quit'
 export type ConnectionHealth = 'connecting' | 'connected' | 'unauthorized' | 'unavailable'
+export type PlayerPresence = 'online' | 'offline' | 'in_game' | 'unknown'
 export type WindowAction = 'minimize' | 'toggle-maximize' | 'close'
 
 export interface QueueFilter {
@@ -126,6 +127,8 @@ export interface PlayerRuntimeState {
   lastRunAt: string | null
   nextRunAt: string | null
   lastError: string | null
+  presence: PlayerPresence
+  presenceUpdatedAt: string | null
 }
 
 export interface RuntimeState {

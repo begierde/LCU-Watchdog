@@ -3,7 +3,7 @@ export { queueDisplayName } from '@shared/queues'
 
 export type PrimaryPage = 'overview' | 'players' | 'settings'
 export type SettingsSection = 'monitoring' | 'events' | 'application'
-export type PlayerUiStatus = 'running' | 'restricted' | 'watching' | 'paused' | 'waiting'
+export type PlayerUiStatus = 'running' | 'restricted' | 'in_game' | 'online' | 'offline' | 'watching' | 'paused' | 'waiting'
 
 export interface PlayerTabState {
   openIds: string[]
@@ -28,6 +28,9 @@ export function playerUiStatus(player: PlayerTarget, runtime: PlayerRuntimeState
   if (runtime.running) return 'running'
   if (!player.enabled) return 'paused'
   if (runtime.lastError) return 'restricted'
+  if (runtime.presence === 'in_game') return 'in_game'
+  if (runtime.presence === 'online') return 'online'
+  if (runtime.presence === 'offline') return 'offline'
   if (runtime.seeded) return 'watching'
   return 'waiting'
 }

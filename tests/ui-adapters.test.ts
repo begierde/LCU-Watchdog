@@ -17,7 +17,7 @@ const player = (enabled = true): PlayerTarget => ({
 
 const runtime = (patch: Partial<PlayerRuntimeState> = {}): PlayerRuntimeState => ({
   seeded: true, seenHistoryGameIds: [], seenOngoingGameIds: [], recentMatches: [], running: false,
-  lastRunAt: null, nextRunAt: null, lastError: null, ...patch
+  lastRunAt: null, nextRunAt: null, lastError: null, presence: 'unknown', presenceUpdatedAt: null, ...patch
 })
 
 describe('UI display adapters', () => {
@@ -38,6 +38,9 @@ describe('UI display adapters', () => {
     expect(playerUiStatus(player(), runtime({ running: true }))).toBe('running')
     expect(playerUiStatus(player(false), runtime())).toBe('paused')
     expect(playerUiStatus(player(), runtime({ lastError: 'spectator forbidden' }))).toBe('restricted')
+    expect(playerUiStatus(player(), runtime({ presence: 'offline' }))).toBe('offline')
+    expect(playerUiStatus(player(), runtime({ presence: 'online' }))).toBe('online')
+    expect(playerUiStatus(player(), runtime({ presence: 'in_game' }))).toBe('in_game')
     expect(playerUiStatus(player(), runtime({ seeded: false }))).toBe('waiting')
     expect(recoverableErrorSummary('HTTP 429')).toContain('频率受限')
   })

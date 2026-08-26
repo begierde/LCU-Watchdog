@@ -121,9 +121,15 @@ export class MonitorService {
         const errors: string[] = []
         if (history.status === 'fulfilled') await this.processHistory(player, history.value.matches, history.value.source, policy)
         else errors.push(`历史：${this.errorMessage(history.reason)}`)
-        if (ongoing.status === 'fulfilled' && ongoing.value) {
-          await this.processOngoing(player, ongoing.value.match, policy, ongoing.value.source)
+        if (ongoing.status === 'fulfilled') {
+          runtime.presence = ongoing.value.presence
+          runtime.presenceUpdatedAt = new Date().toISOString()
+          if (ongoing.value.match && ongoing.value.source) {
+            await this.processOngoing(player, ongoing.value.match, policy, ongoing.value.source)
+          }
         } else if (ongoing.status === 'rejected') {
+          runtime.presence = 'unknown'
+          runtime.presenceUpdatedAt = new Date().toISOString()
           const message = this.errorMessage(ongoing.reason)
           errors.push(`进行中：${message}`)
           this.runtimeStore.addDiagnostic(`玩家 ${player.gameName}#${player.tagLine} 进行中查询受限：${message}`)

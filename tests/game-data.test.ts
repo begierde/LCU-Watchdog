@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeOngoingError, normalizeChatPresence, normalizeGsmOngoing, normalizeMatches } from '@main/game-data'
+import { describeOngoingError, normalizeChatPresence, normalizeFriendPresence, normalizeGsmOngoing, normalizeMatches } from '@main/game-data'
 import { HttpStatusError } from '@main/lcu/http'
 
 describe('match history normalization', () => {
@@ -29,6 +29,14 @@ describe('match history normalization', () => {
       gameStatus: 'inGame', gameId: '123', queueId: '440', gameMode: 'CLASSIC', timestamp: '1700000000000'
     } }], 'target')).toMatchObject({ gameId: '123', queueId: 440, gameMode: 'CLASSIC' })
     expect(normalizeChatPresence([{ puuid: 'target', lol: { gameStatus: 'outOfGame' } }], 'target')).toBeNull()
+  })
+
+  it('distinguishes online and offline friends from query errors', () => {
+    expect(normalizeFriendPresence([{ puuid: 'target', availability: 'offline', lol: { gameStatus: 'outOfGame' } }], 'target'))
+      .toEqual({ presence: 'offline', match: null })
+    expect(normalizeFriendPresence([{ puuid: 'target', availability: 'chat', lol: { gameStatus: 'outOfGame' } }], 'target'))
+      .toEqual({ presence: 'online', match: null })
+    expect(normalizeFriendPresence([], 'target')).toBeNull()
   })
 
   it('normalizes a GSM ongoing game', () => {

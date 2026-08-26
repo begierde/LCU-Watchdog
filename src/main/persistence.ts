@@ -47,7 +47,9 @@ const runtimePlayerSchema = z.object({
     durationSeconds: z.number().optional(), championId: z.number().optional(), championName: z.string().optional(),
     win: z.boolean().optional(), kills: z.number().optional(), deaths: z.number().optional(), assists: z.number().optional()
   })).max(20).default([]),
-  running: z.boolean(), lastRunAt: z.string().nullable(), nextRunAt: z.string().nullable(), lastError: z.string().nullable()
+  running: z.boolean(), lastRunAt: z.string().nullable(), nextRunAt: z.string().nullable(), lastError: z.string().nullable(),
+  presence: z.enum(['online', 'offline', 'in_game', 'unknown']).default('unknown'),
+  presenceUpdatedAt: z.string().nullable().default(null)
 })
 const watchEventSchema = z.object({
   schemaVersion: z.literal(1), eventId: z.string(), type: z.enum(['ongoing_game_detected', 'new_match_detected']), occurredAt: z.string(),
